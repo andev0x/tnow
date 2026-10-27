@@ -157,6 +157,52 @@ func (c Config) Provider(name string) (ProviderConfig, bool) {
 	return ProviderConfig{}, false
 }
 
+func Save(cfg Config) error {
+	p := Path()
+	if p == "" {
+		return fmt.Errorf("no config path")
+	}
+	dir := filepath.Dir(p)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(p, data, 0o600)
+}
+
+func (c *Config) SetAPIKey(name, key string) {
+	for i := range c.Providers {
+		if c.Providers[i].Name == name {
+			c.Providers[i].APIKey = key
+			return
+		}
+	}
+	pc := ProviderConfig{Name: name, APIKey: key}
+	switch name {
+	case "groq":
+		pc.BaseURL = "https://api.groq.com/openai/v1"
+	case "gemini":
+		pc.BaseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
+	case "openrouter":
+		pc.BaseURL = "https://openrouter.ai/api/v1"
+	case "openai":
+		pc.BaseURL = "https://api.openai.com/v1"
+	}
+	c.Providers = append(c.Providers, pc)
+}
+
+func ProviderRequiresKey(name string) bool {
+	switch name {
+	case "ollama", "":
+		return false
+	default:
+		return true
+	}
+}
+
 // CLI override merge helper.
 func MergeProvider(cfg Config, name, model, baseURL, apiKey string) Config {
 	if name != "" {

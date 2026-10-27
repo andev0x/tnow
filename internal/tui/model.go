@@ -16,6 +16,7 @@ import (
 
 	"github.com/andev0x/tnow/internal/analysis"
 	"github.com/andev0x/tnow/internal/app"
+	"github.com/andev0x/tnow/internal/config"
 	"github.com/andev0x/tnow/internal/language"
 	"github.com/andev0x/tnow/internal/translation"
 )
@@ -48,6 +49,13 @@ const (
 	managerModels
 )
 
+const maxSuggestionRows = 5
+
+// fixedInputFrameInnerLines is the inner content height of the input frame.
+// It reserves space for header(1) + textarea(4) + ghost(1) + divider(1) + suggestions(7) = 14
+// so the slash menu appears inside the frame without shifting the result card.
+const fixedInputFrameInnerLines = 14
+
 // slashCommand describes a locally handled command shown in the suggestion
 // menu while the user is typing a "/" command.
 type slashCommand struct {
@@ -62,7 +70,7 @@ var slashCommands = []slashCommand{
 	{Name: "/model", Usage: "/model <name>", Description: "switch active model"},
 	{Name: "/provider", Usage: "/provider <name>", Description: "switch active provider"},
 	{Name: "/word", Aliases: []string{"/analyze", "/mode"}, Usage: "/word [text]", Description: "toggle word analysis mode"},
-	{Name: "/quick", Usage: "/quick", Description: "switch to quick translation mode"},
+	{Name: "/quit", Aliases: []string{"/exit", "/q"}, Usage: "/quit", Description: "exit application"},
 	{Name: "/help", Aliases: []string{"/?"}, Usage: "/help", Description: "show available commands"},
 }
 
@@ -78,14 +86,42 @@ func (c slashCommand) matches(prefix string) bool {
 	return false
 }
 
-// slashSuggestionsFor returns the commands matching the current single-line
-// slash input. Suggestions disappear once arguments start being typed.
-func slashSuggestionsFor(value string) []slashCommand {
+// effectiveSlashLine returns the line that should be interpreted as a slash
+// command. If the textarea contains multiline translation text plus a slash
+// command on the last line (e.g. "hello\n/quick"), we treat the last
+// non-empty line as the command so Quick mode can be activated without
+// clearing the translation input first. For single-line input it is the
+// trimmed value itself.
+func effectiveSlashLine(value string) string {
 	value = strings.TrimSpace(value)
-	if !strings.HasPrefix(value, "/") || strings.Contains(value, "\n") {
+	if value == "" {
+		return ""
+	}
+	if !strings.Contains(value, "\n") {
+		return value
+	}
+	lines := strings.Split(value, "\n")
+	// find last non-empty line
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+// slashSuggestionsFor returns the commands matching the current slash input.
+// It works on the effective slash line so that "hello\n/mo" still offers
+// "/model" completion, and suggestions disappear once arguments start being typed.
+func slashSuggestionsFor(value string) []slashCommand {
+	line := effectiveSlashLine(value)
+	if !strings.HasPrefix(line, "/") {
 		return nil
 	}
-	fields := strings.Fields(value)
+	// if the full value is multiline and the slash is not on the last line,
+	// we already extracted last line, so no need to check Contains("\n")
+	fields := strings.Fields(line)
 	if len(fields) > 1 {
 		return nil
 	}
@@ -101,17 +137,18 @@ func slashSuggestionsFor(value string) []slashCommand {
 }
 
 // slashArgQuery reports whether value is a provider/model command and returns
-// the optional argument used to filter the list.
+// the optional argument used to filter the list. It inspects the effective
+// slash line to support multiline input like "text to translate\n/model gpt".
 func slashArgQuery(value string) (cmd, arg string, ok bool) {
-	value = strings.TrimSpace(value)
-	if !strings.HasPrefix(value, "/") || strings.Contains(value, "\n") {
+	line := effectiveSlashLine(value)
+	if !strings.HasPrefix(line, "/") {
 		return "", "", false
 	}
-	if i := strings.IndexAny(value, " \t"); i >= 0 {
-		cmd = strings.ToLower(value[:i])
-		arg = strings.TrimSpace(value[i+1:])
+	if i := strings.IndexAny(line, " \t"); i >= 0 {
+		cmd = strings.ToLower(line[:i])
+		arg = strings.TrimSpace(line[i+1:])
 	} else {
-		cmd = strings.ToLower(value)
+		cmd = strings.ToLower(line)
 	}
 	switch cmd {
 	case "/provider", "/model":
@@ -161,6 +198,12 @@ type Model struct {
 	highlightQuery string
 	showHighlight  bool
 
+	// api key overlay (secure paste)
+	apiKeyInput     textinput.Model
+	showAPIKey      bool
+	pendingProvider string
+	apiKeyErr       string
+
 	// languages
 	langs   []language.Language
 	langIdx int
@@ -169,6 +212,10 @@ type Model struct {
 	manager    managerKind
 	modelCache map[string][]string
 
+	// autocomplete
+	suggestIdx      int
+	filterExcellent bool
+
 	styles Styles
 }
 
@@ -176,7 +223,7 @@ func NewModel(a *app.App) Model {
 	styles := DefaultStyles()
 
 	ta := textarea.New()
-	ta.Placeholder = "Type or paste text to translate... (Ctrl+Enter to submit)"
+	ta.Placeholder = "Type or paste text to translate... (Alt+Enter to submit)"
 	ta.Focus()
 	ta.ShowLineNumbers = false
 	ta.SetHeight(4)
@@ -201,6 +248,16 @@ func NewModel(a *app.App) Model {
 	hi.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorHighlightFg)).Bold(true)
 	hi.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextMuted))
 
+	ai := textinput.New()
+	ai.Placeholder = "paste API key (input hidden)"
+	ai.CharLimit = 256
+	ai.EchoMode = textinput.EchoNone
+	ai.EchoCharacter = '•'
+	ai.Prompt = "Key: "
+	ai.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorWarning)).Bold(true)
+	ai.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextPrimary))
+	ai.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextMuted))
+
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorWarning))
@@ -217,16 +274,19 @@ func NewModel(a *app.App) Model {
 	}
 
 	return Model{
-		app:            a,
-		mode:           ModeQuick,
-		input:          ta,
-		modelInput:     ti,
-		highlightInput: hi,
-		spinner:        sp,
-		langs:          langs,
-		langIdx:        idx,
-		modelCache:     make(map[string][]string),
-		styles:         styles,
+		app:             a,
+		mode:            ModeQuick,
+		input:           ta,
+		modelInput:      ti,
+		highlightInput:  hi,
+		apiKeyInput:     ai,
+		spinner:         sp,
+		langs:           langs,
+		langIdx:         idx,
+		modelCache:      make(map[string][]string),
+		styles:          styles,
+		suggestIdx:      -1,
+		filterExcellent: false,
 	}
 }
 
@@ -243,6 +303,223 @@ func (m Model) cardWidth() int {
 		w = 54
 	}
 	return w
+}
+
+// suggestionItems returns the current suggestion list and its kind.
+func (m *Model) suggestionItems() (kind string, items []string, title, hint string) {
+	val := m.input.Value()
+	if cmd, arg, ok := slashArgQuery(val); ok {
+		switch cmd {
+		case "/provider":
+			title = "PROVIDERS"
+			items = filterByPrefix(m.providerNames(), arg)
+			hint = "↑↓ navigate · Tab/Enter select · Esc dismiss"
+			return "provider", items, title, hint
+		case "/model":
+			title = "MODELS · " + strings.ToUpper(m.app.Provider)
+			var all []string
+			if m.filterExcellent {
+				all = m.app.ModelsForProviderFiltered(m.app.Provider, true)
+				// merge cached models filtered
+				cached := filterByPrefix(m.modelsForProvider(m.app.Provider), "")
+				var excellentCached []string
+				for _, c := range cached {
+					if app.IsTranslationExcellent(c) {
+						excellentCached = append(excellentCached, c)
+					}
+				}
+				// dedup merge
+				seen := map[string]bool{}
+				for _, v := range all {
+					seen[v] = true
+				}
+				for _, v := range excellentCached {
+					if !seen[v] {
+						all = append(all, v)
+					}
+				}
+				sort.Strings(all)
+				// re-sort excellent first
+				var ex, other []string
+				for _, v := range all {
+					if app.IsTranslationExcellent(v) {
+						ex = append(ex, v)
+					} else {
+						other = append(other, v)
+					}
+				}
+				sort.Strings(ex)
+				sort.Strings(other)
+				all = append(ex, other...)
+			} else {
+				all = m.modelsForProvider(m.app.Provider)
+				// prioritize translation excellent
+				var ex, other []string
+				for _, v := range all {
+					if app.IsTranslationExcellent(v) {
+						ex = append(ex, v)
+					} else {
+						other = append(other, v)
+					}
+				}
+				sort.Strings(ex)
+				sort.Strings(other)
+				all = append(ex, other...)
+			}
+			items = filterByPrefix(all, arg)
+			hint = "↑↓ navigate · Tab/Enter select"
+			if m.filterExcellent {
+				hint += " · Ctrl+T show all"
+			} else {
+				hint += " · Ctrl+T filter translation"
+			}
+			return "model", items, title, hint
+		}
+	}
+	sugs := slashSuggestionsFor(val)
+	if len(sugs) > 0 {
+		title = "COMMANDS"
+		for _, s := range sugs {
+			items = append(items, s.Name)
+		}
+		hint = "↑↓ navigate · Tab/Enter autocomplete · Esc dismiss"
+		return "command", items, title, hint
+	}
+	return "", nil, "", ""
+}
+
+func (m *Model) hasSuggestions() bool {
+	kind, items, _, _ := m.suggestionItems()
+	if kind == "" {
+		return false
+	}
+	// also consider manager overlay when no slash prefix
+	if m.manager != managerNone && kind == "" {
+		return true
+	}
+	return len(items) > 0 || kind == "command"
+}
+
+func (m *Model) ghostText() string {
+	kind, items, _, _ := m.suggestionItems()
+	if len(items) == 0 {
+		return ""
+	}
+	val := effectiveSlashLine(m.input.Value())
+	if kind == "command" {
+		// for "/mo" ghost "del"
+		fields := strings.Fields(val)
+		if len(fields) != 1 {
+			return ""
+		}
+		prefix := strings.ToLower(fields[0])
+		for _, cmd := range slashCommands {
+			if cmd.matches(prefix) && cmd.Name != prefix {
+				if strings.HasPrefix(strings.ToLower(cmd.Name), prefix) {
+					return cmd.Name[len(prefix):]
+				}
+				for _, alias := range cmd.Aliases {
+					if strings.HasPrefix(strings.ToLower(alias), prefix) {
+						return alias[len(prefix):]
+					}
+				}
+			}
+		}
+		// fallback: first item suffix
+		if strings.HasPrefix(strings.ToLower(items[0]), prefix) {
+			return items[0][len(prefix):]
+		}
+		return ""
+	}
+	if kind == "provider" || kind == "model" {
+		// value is "/provider g" -> ghost is remainder of first match
+		parts := strings.SplitN(val, " ", 2)
+		var arg string
+		if len(parts) == 2 {
+			arg = strings.TrimSpace(parts[1])
+		}
+		if arg == "" {
+			return ""
+		}
+		lowerArg := strings.ToLower(arg)
+		for _, it := range items {
+			if strings.HasPrefix(strings.ToLower(it), lowerArg) && strings.ToLower(it) != lowerArg {
+				return it[len(arg):]
+			}
+		}
+	}
+	return ""
+}
+
+func splitInputForApply(value string) (retained string, slashLine string) {
+	trimmed := strings.TrimSpace(value)
+	if !strings.Contains(trimmed, "\n") {
+		return "", trimmed
+	}
+	lines := strings.Split(trimmed, "\n")
+	// find last non-empty line as slash line
+	lastIdx := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			lastIdx = i
+			break
+		}
+	}
+	if lastIdx == -1 {
+		return "", trimmed
+	}
+	slashLine = strings.TrimSpace(lines[lastIdx])
+	if !strings.HasPrefix(slashLine, "/") {
+		return "", trimmed
+	}
+	retained = strings.TrimSpace(strings.Join(lines[:lastIdx], "\n"))
+	return retained, slashLine
+}
+
+func (m *Model) applySuggestion(choice string) {
+	val := m.input.Value()
+	retained, slashLine := splitInputForApply(val)
+	line := slashLine
+	if line == "" {
+		line = strings.TrimSpace(val)
+	}
+	if strings.Contains(strings.TrimSpace(val), "\n") && retained == "" && !strings.HasPrefix(strings.TrimSpace(val), "/") {
+		return
+	}
+	kind, _, _, _ := m.suggestionItems()
+	switch kind {
+	case "command":
+		newLine := choice + " "
+		if retained != "" {
+			m.input.SetValue(retained + "\n" + newLine)
+		} else {
+			m.input.SetValue(newLine)
+		}
+		m.suggestIdx = -1
+	case "provider", "model":
+		parts := strings.SplitN(line, " ", 2)
+		cmd := parts[0]
+		newLine := cmd + " " + choice
+		if retained != "" {
+			m.input.SetValue(retained + "\n" + newLine)
+		} else {
+			m.input.SetValue(newLine)
+		}
+		m.suggestIdx = -1
+	}
+}
+
+func (m *Model) clampSuggestIdx(count int) {
+	if count == 0 {
+		m.suggestIdx = -1
+		return
+	}
+	if m.suggestIdx < -1 {
+		m.suggestIdx = count - 1
+	}
+	if m.suggestIdx >= count {
+		m.suggestIdx = 0
+	}
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -265,6 +542,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.KeyMsg:
+		// API key overlay has highest priority
+		if m.showAPIKey {
+			switch msg.String() {
+			case "enter":
+				key := strings.TrimSpace(m.apiKeyInput.Value())
+				if key == "" {
+					m.apiKeyErr = "API key cannot be empty"
+					return m, nil
+				}
+				prov := m.pendingProvider
+				if err := m.app.SetProviderAPIKey(prov, key); err != nil {
+					m.apiKeyErr = err.Error()
+					return m, nil
+				}
+				m.showAPIKey = false
+				m.apiKeyInput.SetValue("")
+				m.apiKeyErr = ""
+				m.pendingProvider = ""
+				m.app.SetProvider(prov)
+				m.status = "provider " + prov + " connected"
+				m.input.SetValue("")
+				return m, m.fetchModelsCmd(prov)
+			case "esc":
+				m.showAPIKey = false
+				m.apiKeyInput.SetValue("")
+				m.apiKeyErr = ""
+				m.pendingProvider = ""
+				m.status = "cancelled"
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.apiKeyInput, cmd = m.apiKeyInput.Update(msg)
+			return m, cmd
+		}
+
 		// Model overlay
 		if m.showModel {
 			switch msg.String() {
@@ -302,6 +614,76 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+		// Suggestion navigation when suggestions visible
+		if m.hasSuggestions() {
+			kind, items, _, _ := m.suggestionItems()
+			// Ctrl+T toggles translation filter for model suggestions
+			if msg.String() == "ctrl+t" && kind == "model" {
+				m.filterExcellent = !m.filterExcellent
+				m.suggestIdx = -1
+				if m.filterExcellent {
+					m.status = "filtering translation-optimized models"
+				} else {
+					m.status = "showing all models"
+				}
+				return m, nil
+			}
+			switch msg.String() {
+			case "up", "ctrl+p":
+				if len(items) > 0 {
+					if m.suggestIdx == -1 {
+						m.suggestIdx = len(items) - 1
+					} else {
+						m.suggestIdx--
+						m.clampSuggestIdx(len(items))
+					}
+					return m, nil
+				}
+			case "down", "ctrl+n":
+				if len(items) > 0 {
+					if m.suggestIdx == -1 {
+						m.suggestIdx = 0
+					} else {
+						m.suggestIdx++
+						m.clampSuggestIdx(len(items))
+					}
+					return m, nil
+				}
+			case "tab":
+				if len(items) > 0 {
+					idx := m.suggestIdx
+					if idx < 0 || idx >= len(items) {
+						idx = 0
+					}
+					m.applySuggestion(items[idx])
+					m.suggestIdx = -1
+					return m, nil
+				}
+			case "esc":
+				if m.suggestIdx != -1 {
+					m.suggestIdx = -1
+					return m, nil
+				}
+				if m.manager != managerNone {
+					m.manager = managerNone
+					return m, nil
+				}
+				// dismiss suggestions by clearing slash? just reset idx
+				m.suggestIdx = -1
+				// let Esc also clear highlight etc. fall through not
+			}
+			// Enter with suggestion selected should autocomplete, not submit
+			if msg.String() == "enter" {
+				if m.suggestIdx >= 0 && m.suggestIdx < len(items) {
+					m.applySuggestion(items[m.suggestIdx])
+					m.suggestIdx = -1
+					return m, nil
+				}
+				// if slash command with exact match and manager filtering, Tab equivalent
+				// let it fall through to submit handling if input is complete slash command without args
+			}
+		}
+
 		// Main keybindings
 		switch msg.String() {
 		case "ctrl+c":
@@ -320,6 +702,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.manager = managerNone
 				return m, nil
 			}
+			if m.suggestIdx != -1 {
+				m.suggestIdx = -1
+				return m, nil
+			}
 			if m.loading && m.cancel != nil {
 				m.cancel()
 				m.loading = false
@@ -331,15 +717,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tab":
 			if m.mode == ModeQuick {
 				m.mode = ModeAnalyze
-				m.input.Placeholder = "Type a word or short phrase to analyze... (Ctrl+Enter to submit)"
+				m.input.Placeholder = "Type a word or short phrase to analyze... (Alt+Enter to submit)"
 			} else {
 				m.mode = ModeQuick
-				m.input.Placeholder = "Type or paste text to translate... (Ctrl+Enter to submit)"
+				m.input.Placeholder = "Type or paste text to translate... (Alt+Enter to submit)"
 			}
 			m.result = ""
 			m.analysisResult = nil
 			m.status = ""
 			m.manager = managerNone
+			m.suggestIdx = -1
 			return m, nil
 
 		case "ctrl+l":
@@ -369,10 +756,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+s", "ctrl+enter", "alt+enter", "ctrl+j":
 			return m.submit()
 		case "enter":
-			// Many terminals report Ctrl+Enter as a plain Enter. A slash
-			// command is never multi-line input, so execute it here while
-			// leaving regular Enter as a newline insertion.
-			if strings.HasPrefix(strings.TrimSpace(m.input.Value()), "/") {
+			// Many terminals report Ctrl+Enter as a plain Enter. Slash commands
+			// on the effective last line should still be executed, while
+			// regular Enter inserts a newline.
+			if strings.HasPrefix(effectiveSlashLine(m.input.Value()), "/") {
+				// If suggestions are visible and a selection exists, autocomplete was already handled above.
+				// Otherwise submit the slash command.
+				kind, items, _, _ := m.suggestionItems()
+				if kind == "command" && len(items) == 1 && m.suggestIdx == -1 {
+					val := effectiveSlashLine(m.input.Value())
+					if strings.EqualFold(val, items[0]) {
+						return m.submit()
+					}
+				}
+				if kind == "command" {
+					val := effectiveSlashLine(m.input.Value())
+					lower := strings.ToLower(val)
+					for _, cmd := range slashCommands {
+						if strings.ToLower(cmd.Name) == lower {
+							return m.submit()
+						}
+						for _, alias := range cmd.Aliases {
+							if strings.ToLower(alias) == lower {
+								return m.submit()
+							}
+						}
+					}
+					// partial prefix -> autocomplete to first match on Enter
+					if len(items) > 0 {
+						m.applySuggestion(items[0])
+						return m, nil
+					}
+				}
 				return m.submit()
 			}
 		}
@@ -428,7 +843,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// default update input
 	var cmd tea.Cmd
+	prevVal := m.input.Value()
 	m.input, cmd = m.input.Update(msg)
+	// reset suggestion index when input text changes outside navigation
+	if m.input.Value() != prevVal {
+		// keep filter but reset index to allow ghost navigation
+		// don't reset if user is navigating via up/down (already returned)
+		if m.suggestIdx >= 0 {
+			kind, items, _, _ := m.suggestionItems()
+			_ = kind
+			if m.suggestIdx >= len(items) {
+				m.suggestIdx = -1
+			}
+		}
+	}
 	return m, cmd
 }
 
@@ -439,13 +867,14 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	}
 	// Slash commands are local state changes, so they should still work
 	// while a previous translation/analysis request is in flight.
-	if strings.HasPrefix(text, "/") {
+	if strings.HasPrefix(effectiveSlashLine(text), "/") {
 		return m.handleSlashCommand(text)
 	}
 	if m.loading {
 		return m, nil
 	}
 	m.manager = managerNone
+	m.suggestIdx = -1
 	m.result = ""
 	m.analysisResult = nil
 	m.status = "translating..."
@@ -519,25 +948,64 @@ func (m Model) modelsForProvider(name string) []string {
 }
 
 func (m Model) handleSlashCommand(raw string) (tea.Model, tea.Cmd) {
-	fields := strings.Fields(strings.TrimSpace(raw))
+	// Support multiline input where translation text is on previous lines
+	// and the slash command is on the last line, e.g. "hello\n/quit".
+	// We extract the command line and retain the preceding translation text
+	// so that switching modes does not discard the user's input.
+	retained, cmdLine := splitInputForApply(raw)
+	if cmdLine == "" {
+		cmdLine = strings.TrimSpace(raw)
+		retained = ""
+	} else if retained == "" && !strings.HasPrefix(strings.TrimSpace(raw), "/") {
+		// splitInputForApply already handled multiline; for single-line it returns "".
+		// Ensure we still parse the single-line command.
+		cmdLine = strings.TrimSpace(raw)
+		if strings.HasPrefix(cmdLine, "/") && strings.Contains(raw, "\n") {
+			// multiline case already extracted retained correctly
+		} else {
+			retained = ""
+		}
+	}
+	// If raw was multiline but cmdLine extraction failed, fallback to effective line
+	if !strings.HasPrefix(cmdLine, "/") {
+		cmdLine = effectiveSlashLine(raw)
+		if cmdLine == "" {
+			return m, nil
+		}
+		// re-extract retained for this fallback
+		r, c := splitInputForApply(raw)
+		if c != "" {
+			retained, cmdLine = r, c
+		}
+	}
+	fields := strings.Fields(cmdLine)
 	if len(fields) == 0 {
 		return m, nil
 	}
 	cmd := strings.ToLower(fields[0])
 	args := fields[1:]
 	m.manager = managerNone
+	m.suggestIdx = -1
+	// helper to restore retained translation text after mode switches
+	restoreRetained := func() {
+		if retained != "" {
+			m.input.SetValue(retained)
+		} else {
+			m.input.SetValue("")
+		}
+	}
 
 	switch cmd {
 	case "/to", "/lang", "/language", "/target":
 		if len(args) == 0 {
 			m.status = "usage: /to <lang>"
-			m.input.SetValue("")
+			restoreRetained()
 			return m, nil
 		}
 		lang := language.Normalize(args[0])
 		if !language.IsKnown(lang) {
 			m.status = "unknown language: " + args[0]
-			m.input.SetValue("")
+			restoreRetained()
 			return m, nil
 		}
 		m.app.SetTarget(lang)
@@ -551,8 +1019,8 @@ func (m Model) handleSlashCommand(raw string) (tea.Model, tea.Cmd) {
 	case "/model":
 		if len(args) == 0 {
 			m.manager = managerModels
-			m.status = "select a model with /model <name>"
-			m.input.SetValue("")
+			m.status = "select a model with /model <name>  ·  Ctrl+T filter translation"
+			restoreRetained()
 			return m, m.fetchModelsCmd(m.app.Provider)
 		}
 		name := strings.Join(args, " ")
@@ -563,59 +1031,89 @@ func (m Model) handleSlashCommand(raw string) (tea.Model, tea.Cmd) {
 		if len(args) == 0 {
 			m.manager = managerProviders
 			m.status = "select a provider with /provider <name>"
-			m.input.SetValue("")
+			restoreRetained()
 			return m, nil
 		}
 		name := args[0]
+		// Inline key paste: "/provider openai sk-..." sets key directly and connects.
+		if len(args) >= 2 && config.ProviderRequiresKey(name) {
+			inlineKey := strings.Join(args[1:], " ")
+			inlineKey = strings.TrimSpace(inlineKey)
+			if len(inlineKey) > 8 {
+				if err := m.app.SetProviderAPIKey(name, inlineKey); err == nil {
+					m.app.SetProvider(name)
+					m.status = "provider " + name + " connected (key saved)"
+					restoreRetained()
+					return m, m.fetchModelsCmd(name)
+				}
+			}
+		}
+		// If provider requires API key and none configured, prompt securely.
+		if config.ProviderRequiresKey(name) && !m.app.HasAPIKey(name) {
+			m.pendingProvider = name
+			m.showAPIKey = true
+			m.apiKeyInput.SetValue("")
+			m.apiKeyInput.Focus()
+			m.apiKeyErr = ""
+			m.status = "paste API key for " + name + " to connect"
+			restoreRetained()
+			return m, nil
+		}
 		m.app.SetProvider(name)
 		m.status = "provider set to " + name
-		m.input.SetValue("")
+		restoreRetained()
 		return m, m.fetchModelsCmd(name)
 
 	case "/word", "/analyze", "/mode":
 		if len(args) > 0 {
 			m.mode = ModeAnalyze
+			// if there was retained translation, args take precedence
 			m.input.SetValue(strings.Join(args, " "))
-			m.input.Placeholder = "Type a word or short phrase to analyze... (Ctrl+Enter to submit)"
+			m.input.Placeholder = "Type a word or short phrase to analyze... (Alt+Enter to submit)"
 			m.status = "word analysis mode"
 		} else {
 			if m.mode == ModeQuick {
 				m.mode = ModeAnalyze
-				m.input.Placeholder = "Type a word or short phrase to analyze... (Ctrl+Enter to submit)"
+				m.input.Placeholder = "Type a word or short phrase to analyze... (Alt+Enter to submit)"
 				m.status = "word analysis mode"
 			} else {
 				m.mode = ModeQuick
-				m.input.Placeholder = "Type or paste text to translate... (Ctrl+Enter to submit)"
+				m.input.Placeholder = "Type or paste text to translate... (Alt+Enter to submit)"
 				m.status = "quick translation mode"
 			}
-			m.input.SetValue("")
+			restoreRetained()
 		}
 		m.result = ""
 		m.analysisResult = nil
 
-	case "/quick":
-		m.mode = ModeQuick
-		m.input.Placeholder = "Type or paste text to translate... (Ctrl+Enter to submit)"
-		m.status = "quick translation mode"
-		m.result = ""
-		m.analysisResult = nil
-		m.input.SetValue("")
+	case "/quit", "/exit", "/q":
+		return m, tea.Quit
 
 	case "/help", "/?":
 		m.status = "commands: /to <lang>  /model <name>  /provider <name>  /word [text]  /help"
-		m.input.SetValue("")
+		restoreRetained()
 
 	default:
 		m.status = "unknown command: " + cmd
-		m.input.SetValue("")
+		restoreRetained()
 		return m, nil
 	}
 
 	// clear input for commands that did not explicitly set it
+	// keep translation text (retained) when switching modes/languages so quick
+	// mode stays active with the user's input intact
 	if cmd != "/word" || len(args) == 0 {
-		// for /word with text we keep text in input; otherwise ensure cleared
-		if !(cmd == "/word" && len(args) > 0) {
-			m.input.SetValue("")
+		if retained != "" {
+			// preserve translation text; e.g. "hello\n/to vi" -> keep "hello"
+			if m.input.Value() != retained {
+				m.input.SetValue(retained)
+			}
+		} else {
+			// single-line slash command: input should be cleared (already done
+			// via restoreRetained in most branches)
+			if strings.HasPrefix(effectiveSlashLine(m.input.Value()), "/") {
+				m.input.SetValue("")
+			}
 		}
 	}
 	return m, nil
@@ -652,7 +1150,22 @@ func (m Model) View() string {
 	}
 	cardWidth := m.cardWidth()
 
-	// 1. Overlays (Model input or Highlight input)
+	// 1. Overlays (Model input or Highlight input or API key)
+	if m.showAPIKey {
+		errLine := ""
+		if m.apiKeyErr != "" {
+			errLine = "\n" + m.styles.StatusDanger.Render("✗ "+m.apiKeyErr)
+		}
+		label := fmt.Sprintf("Provider \"%s\" requires an API key.", m.pendingProvider)
+		hint := "Enter to connect securely  •  Esc to cancel  •  key is saved to config (0600)"
+		content := m.apiKeyInput.View() + errLine
+		return m.renderModal(
+			"Connect Provider",
+			label,
+			content,
+			hint,
+		)
+	}
 	if m.showModel {
 		return m.renderModal(
 			"Configure Model",
@@ -673,15 +1186,10 @@ func (m Model) View() string {
 	// 2. Header Bar
 	headerBar := m.renderHeader(cardWidth)
 
-	// 3. Input Section Card
-	inputCard := m.renderInputCard(cardWidth)
-
-	// 3b. Slash command suggestions or the active provider/model manager
-	suggestions := m.renderSlashSuggestions(cardWidth)
-	manager := ""
-	if suggestions == "" {
-		manager = m.renderManager(cardWidth)
-	}
+	// 3. Input Section — fixed frame containing textarea + ghost + slash menu.
+	// The frame has a constant inner height (14 lines) so the slash menu appears
+	// neatly inside it without pushing the result card or causing layout jump.
+	inputFrame := m.renderInputCard(cardWidth)
 
 	// 4. Result Section Card
 	resultCard := m.renderResultCard(cardWidth)
@@ -689,21 +1197,19 @@ func (m Model) View() string {
 	// 5. Status Line
 	statusLine := m.renderStatusLine()
 
-	// 6. Help / Keybindings Footer
+	// 6. Help / Keybindings Footer — hidden when idle preview is shown inside
+	// the fixed input frame to avoid duplication (preview already says
+	// "Type / for commands | Alt+Enter ...").
 	footer := m.renderFooter(cardWidth)
+	if kind, _, _, _ := m.suggestionItems(); kind == "" && m.manager == managerNone {
+		footer = ""
+	}
 
-	// Assemble Main Content
+	// Assemble Main Content — input frame is fixed height, so no shift when "/" is typed.
 	var b strings.Builder
 	b.WriteString(headerBar)
 	b.WriteString("\n\n")
-	b.WriteString(inputCard)
-	if suggestions != "" {
-		b.WriteString("\n")
-		b.WriteString(suggestions)
-	} else if manager != "" {
-		b.WriteString("\n")
-		b.WriteString(manager)
-	}
+	b.WriteString(inputFrame)
 	b.WriteString("\n\n")
 	b.WriteString(resultCard)
 	if statusLine != "" {
@@ -784,11 +1290,262 @@ func (m Model) renderInputCard(cardWidth int) string {
 		}
 	}
 
-	boxStyle := m.styles.CardBoxFocus.Copy().Width(cardWidth)
-	cardContent := headerRow + "\n" + m.input.View()
-	return boxStyle.Render(cardContent)
+	// ghost line: reserve 1 line inside the fixed frame to avoid jump;
+	// show dim completion only when slash prefix is present.
+	ghost := m.ghostText()
+	ghostLine := ""
+	hasGhost := false
+	if ghost != "" && strings.HasPrefix(strings.TrimSpace(m.input.Value()), "/") {
+		ghostLine = m.styles.Ghost.Render("  ↳ "+strings.TrimSpace(m.input.Value())+ghost) + "  " + m.styles.BoxMeta.Render("Tab to accept")
+		hasGhost = true
+	}
+
+	// Fixed frame: header(1) + textarea(4) + ghost(1) + divider(1) + suggestions(7) = 14 inner lines.
+	// We build the inner content and pad to fixedInputFrameInnerLines so the outer
+	// result card never shifts when the slash menu appears/disappears.
+	divider := m.styles.SubtleLine.Render(strings.Repeat("─", cardWidth-4))
+	suggestionBlock := m.renderSuggestionInline(cardWidth)
+
+	// Assemble inner content (without outer border) with fixed height.
+	// textarea View is typically 4 lines; we treat it as one block.
+	var parts []string
+	parts = append(parts, headerRow)
+	parts = append(parts, m.input.View())
+	if hasGhost {
+		parts = append(parts, ghostLine)
+	} else {
+		// reserve the ghost line as empty to keep frame height stable
+		parts = append(parts, "")
+	}
+	parts = append(parts, divider)
+	// suggestionBlock is already 7 lines joined; split and append
+	suggestionLines := strings.Split(suggestionBlock, "\n")
+	parts = append(parts, suggestionLines...)
+
+	// Join and pad to fixed height
+	inner := strings.Join(parts, "\n")
+	// Count inner lines (textarea block may contain newlines already)
+	innerLines := strings.Split(inner, "\n")
+	// textarea's View already counts as 4, but Join added correct newlines.
+	// Pad bottom with empty lines to reach fixed height if needed (should already be 14)
+	for len(innerLines) < fixedInputFrameInnerLines {
+		innerLines = append(innerLines, "")
+	}
+	if len(innerLines) > fixedInputFrameInnerLines {
+		innerLines = innerLines[:fixedInputFrameInnerLines]
+	}
+	innerPadded := strings.Join(innerLines, "\n")
+
+	boxStyle := m.styles.CardBoxFocus.Width(cardWidth)
+	return boxStyle.Render(innerPadded)
 }
 
+// renderSuggestionInline returns a fixed-height (7 lines) block for the input frame.
+// When no slash/manager is active it returns blank lines with a subtle placeholder,
+// so the frame height stays constant and the menu appears neatly inside.
+func (m Model) renderSuggestionInline(cardWidth int) string {
+	// manager has priority when slash is not active
+	if m.manager != managerNone {
+		// reuse arg suggestions but render inline without outer box
+		var lines []string
+		switch m.manager {
+		case managerProviders:
+			lines = m.suggestionInlineLinesForArg("/provider", "", cardWidth)
+		case managerModels:
+			lines = m.suggestionInlineLinesForArg("/model", "", cardWidth)
+		}
+		// ensure fixed height (maxSuggestionRows + 2)
+		for len(lines) < maxSuggestionRows+2 {
+			lines = append(lines, "")
+		}
+		if len(lines) > maxSuggestionRows+2 {
+			lines = lines[:maxSuggestionRows+2]
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	kind, _, _, _ := m.suggestionItems()
+	if kind == "" {
+		// idle: no hidden commands — just a subtle preview in the reserved gap.
+		// This keeps the fixed frame height stable (7 lines) while avoiding an
+		// empty gap; the same text is hidden from the footer to avoid duplication.
+		preview := m.styles.BoxMeta.Render("Type / for commands  |  Alt+Enter to submit  |  Tab switch mode  •  Esc clear")
+		lines := make([]string, maxSuggestionRows+2)
+		for i := range lines {
+			lines[i] = ""
+		}
+		// center preview vertically in the 7-line block
+		mid := (len(lines) - 1) / 2
+		lines[mid] = preview
+		return strings.Join(lines, "\n")
+	}
+
+	// active slash suggestions: render inline without outer SuggestBox border
+	var lines []string
+	if cmd, arg, ok := slashArgQuery(m.input.Value()); ok {
+		lines = m.suggestionInlineLinesForArg(cmd, arg, cardWidth)
+	} else {
+		lines = m.suggestionInlineLinesForCommands(cardWidth)
+	}
+	for len(lines) < maxSuggestionRows+2 {
+		lines = append(lines, "")
+	}
+	if len(lines) > maxSuggestionRows+2 {
+		lines = lines[:maxSuggestionRows+2]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) suggestionInlineLinesForCommands(cardWidth int) []string {
+	suggestions := slashSuggestionsFor(m.input.Value())
+	title := m.styles.BoxLabel.Render("COMMANDS")
+	lines := []string{title}
+	visible := suggestions
+	if len(visible) > maxSuggestionRows {
+		visible = visible[:maxSuggestionRows]
+	}
+	for i, cmd := range visible {
+		isSelected := i == m.suggestIdx
+		if isSelected {
+			lines = append(lines, m.styles.SuggestActive.Render(" ▸ "+cmd.Usage+"  "+cmd.Description))
+		} else {
+			lines = append(lines, "  "+m.styles.SuggestIdle.Render(cmd.Usage)+"  "+m.styles.BoxMeta.Render(cmd.Description))
+		}
+	}
+	for len(lines) < maxSuggestionRows+1 {
+		lines = append(lines, "")
+	}
+	if len(suggestions) > maxSuggestionRows {
+		lines = append(lines, m.styles.BoxMeta.Render(fmt.Sprintf("  +%d more — keep typing to filter", len(suggestions)-maxSuggestionRows)))
+	} else {
+		lines = append(lines, m.styles.BoxMeta.Render("  ↑↓ navigate · Tab/Enter accept · Esc dismiss"))
+	}
+	return lines
+}
+
+func (m Model) suggestionInlineLinesForArg(cmd, arg string, cardWidth int) []string {
+	var title string
+	var names []string
+	var hint string
+	switch cmd {
+	case "/provider":
+		title = "PROVIDERS"
+		names = filterByPrefix(m.providerNames(), arg)
+		hint = "↑↓ navigate · Tab/Enter select · Esc dismiss"
+	case "/model":
+		title = "MODELS · " + strings.ToUpper(m.app.Provider)
+		var all []string
+		if m.filterExcellent {
+			all = m.app.ModelsForProviderFiltered(m.app.Provider, true)
+			cached := m.modelsForProvider(m.app.Provider)
+			seen := map[string]bool{}
+			for _, v := range all {
+				seen[v] = true
+			}
+			for _, v := range cached {
+				if app.IsTranslationExcellent(v) && !seen[v] {
+					all = append(all, v)
+				}
+			}
+			sort.Strings(all)
+			var ex, other []string
+			for _, v := range all {
+				if app.IsTranslationExcellent(v) {
+					ex = append(ex, v)
+				} else {
+					other = append(other, v)
+				}
+			}
+			sort.Strings(ex)
+			sort.Strings(other)
+			all = append(ex, other...)
+		} else {
+			all = m.modelsForProvider(m.app.Provider)
+			var ex, other []string
+			for _, v := range all {
+				if app.IsTranslationExcellent(v) {
+					ex = append(ex, v)
+				} else {
+					other = append(other, v)
+				}
+			}
+			sort.Strings(ex)
+			sort.Strings(other)
+			all = append(ex, other...)
+		}
+		names = filterByPrefix(all, arg)
+		if m.filterExcellent {
+			hint = "showing translation-optimized · Ctrl+T show all · ↑↓ Tab/Enter"
+		} else {
+			hint = "✦ translation-optimized first · Ctrl+T filter · ↑↓ Tab/Enter"
+		}
+	default:
+		return []string{}
+	}
+	lines := []string{m.styles.BoxLabel.Render(title)}
+	if len(names) == 0 {
+		lines = append(lines, "  "+m.styles.EmptyState.Render("no matches"))
+		for len(lines) < maxSuggestionRows+1 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, m.styles.BoxMeta.Render("  "+hint))
+		return lines
+	}
+	total := len(names)
+	visible := names
+	if len(visible) > maxSuggestionRows {
+		start := 0
+		if m.suggestIdx >= 0 {
+			start = m.suggestIdx - maxSuggestionRows/2
+			if start < 0 {
+				start = 0
+			}
+			if start+maxSuggestionRows > len(visible) {
+				start = len(visible) - maxSuggestionRows
+			}
+		}
+		visible = visible[start : start+maxSuggestionRows]
+	}
+	for _, name := range visible {
+		isSelected := false
+		if m.suggestIdx >= 0 && m.suggestIdx < len(names) && names[m.suggestIdx] == name {
+			isSelected = true
+		}
+		marker := "  "
+		active := name == m.app.Provider
+		if cmd == "/model" {
+			active = name == m.app.Model
+		}
+		if active {
+			marker = "● "
+		}
+		if isSelected {
+			marker = "▸ "
+		}
+		line := "  " + marker + name
+		if app.IsTranslationExcellent(name) {
+			line += " " + m.styles.BadgeExcellent.Render("✦")
+		}
+		if active {
+			line += "  " + m.styles.BoxMeta.Render("(active)")
+		}
+		if isSelected {
+			line = m.styles.SuggestActive.Render(line)
+		}
+		lines = append(lines, line)
+	}
+	for len(lines) < maxSuggestionRows+1 {
+		lines = append(lines, "")
+	}
+	if total > maxSuggestionRows {
+		lines = append(lines, m.styles.BoxMeta.Render(fmt.Sprintf("  %d/%d · %s", len(visible), total, hint)))
+	} else {
+		lines = append(lines, m.styles.BoxMeta.Render("  "+hint))
+	}
+	return lines
+}
+
+//nolint:unused // kept for backward compatibility; View now uses fixed-frame inline rendering
 func (m Model) renderSlashSuggestions(cardWidth int) string {
 	if cmd, arg, ok := slashArgQuery(m.input.Value()); ok {
 		return m.renderArgSuggestions(cardWidth, cmd, arg)
@@ -801,16 +1558,37 @@ func (m Model) renderSlashSuggestions(cardWidth int) string {
 
 	title := m.styles.BoxLabel.Render("COMMANDS")
 	lines := []string{title}
-	for _, cmd := range suggestions {
-		usage := m.styles.ModalTitle.Render(cmd.Usage)
-		desc := m.styles.BoxMeta.Render(cmd.Description)
-		lines = append(lines, "  "+usage+"  "+desc)
+	visible := suggestions
+	if len(visible) > maxSuggestionRows {
+		visible = visible[:maxSuggestionRows]
+	}
+	for i, cmd := range visible {
+		isSelected := i == m.suggestIdx
+		usage := cmd.Usage
+		desc := cmd.Description
+		var line string
+		if isSelected {
+			line = m.styles.SuggestActive.Render(" ▸ " + usage + "  " + desc)
+		} else {
+			line = "  " + m.styles.SuggestIdle.Render(usage) + "  " + m.styles.BoxMeta.Render(desc)
+		}
+		lines = append(lines, line)
+	}
+	// pad to fixed height to avoid erratic jumping when filtering
+	for len(lines) < maxSuggestionRows+1 {
+		lines = append(lines, "")
+	}
+	if len(suggestions) > maxSuggestionRows {
+		lines = append(lines, m.styles.BoxMeta.Render(fmt.Sprintf("  +%d more — keep typing to filter", len(suggestions)-maxSuggestionRows)))
+	} else {
+		lines = append(lines, m.styles.BoxMeta.Render("  ↑↓ navigate · Tab/Enter accept · Esc dismiss"))
 	}
 
-	boxStyle := m.styles.CardBox.Copy().Width(cardWidth)
+	boxStyle := m.styles.SuggestBox.Width(cardWidth)
 	return boxStyle.Render(strings.Join(lines, "\n"))
 }
 
+//nolint:unused // inline version is used inside fixed frame
 func (m Model) renderArgSuggestions(cardWidth int, cmd, arg string) string {
 	var title string
 	var names []string
@@ -820,11 +1598,55 @@ func (m Model) renderArgSuggestions(cardWidth int, cmd, arg string) string {
 	case "/provider":
 		title = "PROVIDERS"
 		names = filterByPrefix(m.providerNames(), arg)
-		hint = "/provider <name>"
+		hint = "↑↓ navigate · Tab/Enter select · Esc dismiss"
 	case "/model":
 		title = "MODELS · " + strings.ToUpper(m.app.Provider)
-		names = filterByPrefix(m.modelsForProvider(m.app.Provider), arg)
-		hint = "/model <name>"
+		var all []string
+		if m.filterExcellent {
+			all = m.app.ModelsForProviderFiltered(m.app.Provider, true)
+			// include cached
+			cached := m.modelsForProvider(m.app.Provider)
+			seen := map[string]bool{}
+			for _, v := range all {
+				seen[v] = true
+			}
+			for _, v := range cached {
+				if app.IsTranslationExcellent(v) && !seen[v] {
+					all = append(all, v)
+				}
+			}
+			sort.Strings(all)
+			var ex, other []string
+			for _, v := range all {
+				if app.IsTranslationExcellent(v) {
+					ex = append(ex, v)
+				} else {
+					other = append(other, v)
+				}
+			}
+			sort.Strings(ex)
+			sort.Strings(other)
+			all = append(ex, other...)
+		} else {
+			all = m.modelsForProvider(m.app.Provider)
+			var ex, other []string
+			for _, v := range all {
+				if app.IsTranslationExcellent(v) {
+					ex = append(ex, v)
+				} else {
+					other = append(other, v)
+				}
+			}
+			sort.Strings(ex)
+			sort.Strings(other)
+			all = append(ex, other...)
+		}
+		names = filterByPrefix(all, arg)
+		if m.filterExcellent {
+			hint = "showing translation-optimized · Ctrl+T show all · ↑↓ Tab/Enter"
+		} else {
+			hint = "✦ translation-optimized first · Ctrl+T filter · ↑↓ Tab/Enter"
+		}
 	default:
 		return ""
 	}
@@ -832,8 +1654,37 @@ func (m Model) renderArgSuggestions(cardWidth int, cmd, arg string) string {
 	lines := []string{m.styles.BoxLabel.Render(title)}
 	if len(names) == 0 {
 		lines = append(lines, "  "+m.styles.EmptyState.Render("no matches"))
+		// pad to fixed height
+		for len(lines) < maxSuggestionRows+1 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, m.styles.BoxMeta.Render("  "+hint))
+		boxStyle := m.styles.SuggestBox.Width(cardWidth)
+		return boxStyle.Render(strings.Join(lines, "\n"))
 	}
-	for _, name := range names {
+	// limit visible rows
+	total := len(names)
+	visible := names
+	if len(visible) > maxSuggestionRows {
+		// scroll window around selected index
+		start := 0
+		if m.suggestIdx >= 0 {
+			start = m.suggestIdx - maxSuggestionRows/2
+			if start < 0 {
+				start = 0
+			}
+			if start+maxSuggestionRows > len(visible) {
+				start = len(visible) - maxSuggestionRows
+			}
+		}
+		visible = visible[start : start+maxSuggestionRows]
+	}
+	for _, name := range visible {
+		// find original index for selection highlight
+		isSelected := false
+		if m.suggestIdx >= 0 && m.suggestIdx < len(names) && names[m.suggestIdx] == name {
+			isSelected = true
+		}
 		marker := "  "
 		active := name == m.app.Provider
 		if cmd == "/model" {
@@ -842,23 +1693,36 @@ func (m Model) renderArgSuggestions(cardWidth int, cmd, arg string) string {
 		if active {
 			marker = "● "
 		}
+		if isSelected {
+			marker = "▸ "
+		}
 		line := "  " + marker + name
-		if cmd == "/provider" {
-			if models := m.modelsForProvider(name); len(models) > 0 {
-				line += "  " + m.styles.BoxMeta.Render("· "+strings.Join(models, ", "))
-			}
+		if app.IsTranslationExcellent(name) {
+			line += " " + m.styles.BadgeExcellent.Render("✦")
 		}
 		if active {
 			line += "  " + m.styles.BoxMeta.Render("(active)")
 		}
+		if isSelected {
+			line = m.styles.SuggestActive.Render(line)
+		}
 		lines = append(lines, line)
 	}
-	lines = append(lines, m.styles.BoxMeta.Render("  "+hint))
+	// pad to fixed height to keep layout stable when filtering reduces count
+	for len(lines) < maxSuggestionRows+1 {
+		lines = append(lines, "")
+	}
+	if total > maxSuggestionRows {
+		lines = append(lines, m.styles.BoxMeta.Render(fmt.Sprintf("  %d/%d · %s", len(visible), total, hint)))
+	} else {
+		lines = append(lines, m.styles.BoxMeta.Render("  "+hint))
+	}
 
-	boxStyle := m.styles.CardBox.Copy().Width(cardWidth)
+	boxStyle := m.styles.SuggestBox.Width(cardWidth)
 	return boxStyle.Render(strings.Join(lines, "\n"))
 }
 
+//nolint:unused
 func (m Model) renderManager(cardWidth int) string {
 	switch m.manager {
 	case managerProviders:
@@ -908,10 +1772,10 @@ func (m Model) renderResultCard(cardWidth int) string {
 	} else if m.result != "" {
 		content = RenderHighlightedText(m.result, m.highlightQuery, m.styles)
 	} else {
-		content = m.styles.EmptyState.Render("Results will appear here. Press Ctrl+Enter to submit.")
+		content = m.styles.EmptyState.Render("Results will appear here. Press Alt+Enter to submit.")
 	}
 
-	boxStyle := m.styles.CardBox.Copy().Width(cardWidth)
+	boxStyle := m.styles.CardBox.Width(cardWidth)
 	return boxStyle.Render(headerRow + "\n" + content)
 }
 
@@ -921,7 +1785,8 @@ func (m Model) renderStatusLine() string {
 	}
 	noticePrefixes := []string{
 		"select a ", "target language set to ", "model set to ", "provider set to ",
-		"word analysis mode", "quick translation mode",
+		"word analysis mode", "quick translation mode", "filtering", "showing all",
+		"provider ", "paste API",
 	}
 	for _, prefix := range noticePrefixes {
 		if strings.HasPrefix(m.status, prefix) {
@@ -941,7 +1806,7 @@ func (m Model) renderStatusLine() string {
 }
 
 func (m Model) renderFooter(cardWidth int) string {
-	footerText := "Type /help for commands  |  Ctrl+Enter to submit  |  Esc to quit"
+	footerText := "Type / for commands  |  Alt+Enter to submit  |  Tab switch mode  •  Esc clear"
 	return lipgloss.NewStyle().Width(cardWidth).Align(lipgloss.Center).Foreground(lipgloss.Color(ColorTextMuted)).Render(footerText)
 }
 
@@ -951,7 +1816,7 @@ func (m Model) renderModal(title, label, inputView, hint string) string {
 	hintStyled := m.styles.ModalHint.Render(hint)
 
 	modalContent := fmt.Sprintf("%s\n\n%s\n%s\n\n%s", titleStyled, labelStyled, inputView, hintStyled)
-	modalBox := m.styles.ModalBox.Copy().Width(56).Render(modalContent)
+	modalBox := m.styles.ModalBox.Width(56).Render(modalContent)
 
 	width := m.width
 	if width == 0 {

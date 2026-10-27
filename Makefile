@@ -1,4 +1,4 @@
-.PHONY: build test race vet fmt install clean
+.PHONY: build test race vet fmt lint lint-fix install clean
 
 build:
 	go build ./...
@@ -14,6 +14,12 @@ vet:
 
 fmt:
 	gofmt -w .
+
+lint:
+	golangci-lint run ./...
+
+lint-fix:
+	golangci-lint run --fix ./...
 
 install:
 	go install ./cmd/tnow

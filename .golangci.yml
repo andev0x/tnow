@@ -1,0 +1,63 @@
+version: "2"
+
+run:
+  timeout: 5m
+  go: "1.27"
+  tests: true
+  modules-download-mode: mod
+
+linters:
+  default: standard
+  settings:
+    govet:
+      enable:
+        - bools
+        - copylocks
+        - errorsas
+      disable:
+        - fieldalignment
+        - shadow
+  exclusions:
+    generated: lax
+    presets:
+      - common-false-positives
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - dupl
+          - gosec
+          - gocyclo
+          - funlen
+      - path: internal/tui/
+        linters:
+          - funlen
+          - cyclop
+          - gocognit
+    paths:
+      - third_party
+      - vendor
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/andev0x/tnow
+  exclusions:
+    generated: lax
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: true
+
+output:
+  sort-order:
+    - linter
+    - file
+
+severity:
+  default: error

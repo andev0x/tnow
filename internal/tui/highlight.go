@@ -107,7 +107,7 @@ func RenderAnalysisStructured(r analysis.Result, query string, s Styles, width i
 	var b strings.Builder
 
 	// Top Section: Word, Phonetics, and Part of Speech
-	wordStyled := s.HighlightBold.Copy().Foreground(s.Logo.GetForeground()).Render(r.Word)
+	wordStyled := s.HighlightBold.Foreground(s.Logo.GetForeground()).Render(r.Word)
 	b.WriteString(wordStyled)
 
 	var badges []string

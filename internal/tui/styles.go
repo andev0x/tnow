@@ -80,6 +80,13 @@ type Styles struct {
 	ModalBox     lipgloss.Style
 	ModalTitle   lipgloss.Style
 	ModalHint    lipgloss.Style
+
+	// Autocomplete / Suggestions
+	SuggestBox     lipgloss.Style
+	SuggestActive  lipgloss.Style
+	SuggestIdle    lipgloss.Style
+	Ghost          lipgloss.Style
+	BadgeExcellent lipgloss.Style
 }
 
 func DefaultStyles() Styles {
@@ -210,5 +217,23 @@ func DefaultStyles() Styles {
 		ModalHint: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(ColorTextMuted)).
 			Italic(true),
+
+		// Autocomplete / Suggestions (minimal, stable height)
+		SuggestBox: lipgloss.NewStyle().
+			Border(subtleBorder).
+			BorderForeground(lipgloss.Color(ColorBorderSubtle)).
+			Padding(0, 1),
+		SuggestActive: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(ColorPrimary)).
+			Background(lipgloss.Color(ColorBgPill)).
+			Bold(true),
+		SuggestIdle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(ColorTextPrimary)),
+		Ghost: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(ColorTextMuted)).
+			Italic(true),
+		BadgeExcellent: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(ColorSuccess)).
+			Bold(true),
 	}
 }

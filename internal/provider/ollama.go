@@ -49,7 +49,7 @@ func (p *Ollama) ListModels(ctx context.Context) ([]string, error) {
 		}
 		return nil, &runtime.RuntimeError{Kind: kind, Err: err}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(resp.Body)
@@ -141,10 +141,10 @@ func (p *Ollama) Generate(ctx context.Context, req runtime.GenerationRequest) (r
 		}
 		return runtime.GenerationResult{}, &runtime.RuntimeError{Kind: kind, Err: err}
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
 		kind := runtime.ErrModel
 		if resp.StatusCode >= 500 {
 			kind = runtime.ErrProviderUnavail
@@ -155,6 +155,7 @@ func (p *Ollama) Generate(ctx context.Context, req runtime.GenerationRequest) (r
 	if req.Stream {
 		ch := make(chan runtime.StreamEvent, 32)
 		go func() {
+			defer func() { _ = resp.Body.Close() }()
 			defer close(ch)
 			scanner := bufio.NewScanner(resp.Body)
 			scanner.Buffer(make([]byte, 64*1024), 1024*1024)
@@ -189,6 +190,8 @@ func (p *Ollama) Generate(ctx context.Context, req runtime.GenerationRequest) (r
 		}()
 		return runtime.GenerationResult{Stream: ch}, nil
 	}
+
+	defer func() { _ = resp.Body.Close() }()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {

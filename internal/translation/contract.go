@@ -27,10 +27,7 @@ Do not prefix the translation.`, language.DisplayName(target))
 // BuildRequest converts a domain request into a bounded generation request.
 func BuildRequest(req Request, provider, model string, maxTokens int, temperature float64, stream bool) runtime.GenerationRequest {
 	src := req.SourceLang
-	if src == "" || src == language.Auto {
-		// leave auto; detection optional. We'll not inject.
-	}
-	_ = src
+	_ = src // auto-detection optional, leave as-is when empty or Auto
 	user := req.Text
 	if req.Context != "" {
 		user = req.Context + "\n\n" + req.Text

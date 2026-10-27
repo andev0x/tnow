@@ -10,9 +10,7 @@ func Validate(r Result) error {
 	if strings.TrimSpace(r.Word) == "" {
 		return fmt.Errorf("missing word")
 	}
-	if strings.TrimSpace(r.Language) == "" {
-		// allow; fill later
-	}
+	_ = strings.TrimSpace(r.Language) // optional, filled later
 	if len(r.Definitions) == 0 {
 		return fmt.Errorf("missing definitions")
 	}

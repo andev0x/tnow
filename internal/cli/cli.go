@@ -81,7 +81,7 @@ func Run(a *app.App, args []string, stdin io.Reader, stdout, stderr io.Writer) i
 			TargetLang: a.TargetLang,
 		})
 		if err != nil {
-			fmt.Fprintln(stderr, err.Error())
+			_, _ = fmt.Fprintln(stderr, err.Error())
 			return 1
 		}
 		renderAnalysis(stdout, res)
@@ -95,10 +95,10 @@ func Run(a *app.App, args []string, stdin io.Reader, stdout, stderr io.Writer) i
 	}
 	res, err := a.Translation.Translate(ctx, req)
 	if err != nil {
-		fmt.Fprintln(stderr, err.Error())
+		_, _ = fmt.Fprintln(stderr, err.Error())
 		return 1
 	}
-	fmt.Fprintln(stdout, res.Text)
+	_, _ = fmt.Fprintln(stdout, res.Text)
 	return 0
 }
 
@@ -132,31 +132,31 @@ func reorderArgs(args []string) []string {
 }
 
 func renderAnalysis(w io.Writer, r analysis.Result) {
-	fmt.Fprintln(w, r.Word)
-	fmt.Fprintln(w, strings.Repeat("─", 28))
-	fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, r.Word)
+	_, _ = fmt.Fprintln(w, strings.Repeat("─", 28))
+	_, _ = fmt.Fprintln(w)
 	if r.IPA != "" {
-		fmt.Fprintln(w, r.IPA)
-		fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w, r.IPA)
+		_, _ = fmt.Fprintln(w)
 	}
 	if r.PartOfSpeech != "" {
-		fmt.Fprintln(w, strings.ToUpper(r.PartOfSpeech))
-		fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w, strings.ToUpper(r.PartOfSpeech))
+		_, _ = fmt.Fprintln(w)
 	}
-	fmt.Fprintln(w, "Meanings")
-	fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "Meanings")
+	_, _ = fmt.Fprintln(w)
 	for _, d := range r.Definitions {
-		fmt.Fprintf(w, "• %s\n", d.Meaning)
+		_, _ = fmt.Fprintf(w, "• %s\n", d.Meaning)
 		if len(d.Translations) > 0 {
-			fmt.Fprintf(w, "  %s\n", strings.Join(d.Translations, ", "))
+			_, _ = fmt.Fprintf(w, "  %s\n", strings.Join(d.Translations, ", "))
 		}
 	}
 	if len(r.Examples) > 0 {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "Examples")
-		fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w, "Examples")
+		_, _ = fmt.Fprintln(w)
 		for _, e := range r.Examples {
-			fmt.Fprintf(w, "%s\n→ %s\n\n", e.Source, e.Translation)
+			_, _ = fmt.Fprintf(w, "%s\n→ %s\n\n", e.Source, e.Translation)
 		}
 	}
 }

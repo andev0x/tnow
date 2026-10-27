@@ -1,2 +1,9 @@
 # ohgo runtime state
 .ohgo/
+
+# macOS
+.DS_Store
+
+# bug screenshots
+imgbugs/
+img-bugs/

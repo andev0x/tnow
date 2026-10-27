@@ -177,9 +177,121 @@ func (a *App) ModelsForProvider(name string) []string {
 	return models
 }
 
+// SearchModels supports one (query) or two (provider, query) arguments.
+func (a *App) SearchModels(args ...string) []string {
+	provider := a.Provider
+	query := ""
+	if len(args) == 1 {
+		query = args[0]
+	} else if len(args) >= 2 {
+		provider = args[0]
+		query = args[1]
+	}
+	all := a.ModelsForProvider(provider)
+	return filterStrings(all, query)
+}
+
+// SearchModelsByQuery searches models for the active provider.
+func (a *App) SearchModelsByQuery(query string) []string {
+	return a.SearchModels(query)
+}
+
+// SearchModelsForProvider supports (provider, query) or (query).
+func (a *App) SearchModelsForProvider(args ...string) []string {
+	return a.SearchModels(args...)
+}
+
+// FilterModels supports (provider, query) or (query).
+func (a *App) FilterModels(args ...string) []string {
+	return a.SearchModels(args...)
+}
+
+// FilterModelsForProvider supports (provider, query) or (query).
+func (a *App) FilterModelsForProvider(args ...string) []string {
+	return a.SearchModels(args...)
+}
+
+// ModelsForProviderSearch supports (provider, query) or (query).
+func (a *App) ModelsForProviderSearch(args ...string) []string {
+	return a.SearchModels(args...)
+}
+
+// SearchModel is an alias for SearchModels using the active provider.
+func (a *App) SearchModel(query string) []string {
+	return a.SearchModels(a.Provider, query)
+}
+
+// SearchProviders returns configured providers filtered by query (case-insensitive
+// substring search). An empty query returns all providers.
+func (a *App) SearchProviders(query string) []string {
+	return filterStrings(a.ProviderNames(), query)
+}
+
+// SearchProviderNames is an alias for SearchProviders.
+func (a *App) SearchProviderNames(query string) []string {
+	return a.SearchProviders(query)
+}
+
+// FilterProviders is an alias for SearchProviders.
+func (a *App) FilterProviders(query string) []string {
+	return a.SearchProviders(query)
+}
+
+// ProviderNamesSearch is an alias for SearchProviders.
+func (a *App) ProviderNamesSearch(query string) []string {
+	return a.SearchProviders(query)
+}
+
+// SearchProvider is an alias for SearchProviders.
+func (a *App) SearchProvider(query string) []string {
+	return a.SearchProviders(query)
+}
+
 // ListModels asks the active provider for the models it exposes.
 func (a *App) ListModels(ctx context.Context) ([]string, error) {
 	return a.Runtime.ListModels(ctx, a.Provider)
+}
+
+// filterByPrefix is an alias for filterStrings to support legacy prefix callers.
+func filterByPrefix(items []string, query string) []string { return filterStrings(items, query) }
+
+// Exported aliases.
+func FilterByPrefix(items []string, query string) []string { return filterStrings(items, query) }
+func FilterBySearch(items []string, query string) []string { return filterStrings(items, query) }
+func FilterStrings(items []string, query string) []string  { return filterStrings(items, query) }
+
+// filterBySearch is an alias for filterStrings.
+func filterBySearch(items []string, query string) []string { return filterStrings(items, query) }
+
+// filterStrings filters a slice of strings by a case-insensitive search query.
+// Multiple space-separated terms must all be present in the item.
+func filterStrings(items []string, query string) []string {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		// return a copy to avoid aliasing
+		out := make([]string, len(items))
+		copy(out, items)
+		return out
+	}
+	terms := strings.Fields(query)
+	var filtered []string
+	for _, item := range items {
+		lower := strings.ToLower(item)
+		ok := true
+		for _, term := range terms {
+			if !strings.Contains(lower, term) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			filtered = append(filtered, item)
+		}
+	}
+	if filtered == nil {
+		filtered = []string{}
+	}
+	return filtered
 }
 
 // IsTranslationExcellent reports whether a model is known to excel at multilingual translation.

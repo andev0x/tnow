@@ -55,6 +55,11 @@ const maxSuggestionRows = 5
 // It reserves space for header(1) + textarea(4) + ghost(1) + divider(1) + suggestions(7) = 14
 // so the slash menu appears inside the frame without shifting the result card.
 const fixedInputFrameInnerLines = 14
+const fixedResultInnerLines = 10 // header(1) + content(8) + padding(1)
+const fixedResultContentLines = 8
+const fixedHeaderLines = 2
+const fixedFooterLines = 1
+const fixedStatusLines = 1
 
 // slashCommand describes a locally handled command shown in the suggestion
 // menu while the user is typing a "/" command.
@@ -67,8 +72,7 @@ type slashCommand struct {
 
 var slashCommands = []slashCommand{
 	{Name: "/to", Aliases: []string{"/lang", "/language", "/target"}, Usage: "/to <lang>", Description: "change target language"},
-	{Name: "/model", Usage: "/model <name>", Description: "switch active model"},
-	{Name: "/provider", Usage: "/provider <name>", Description: "switch active provider"},
+	{Name: "/models", Usage: "/models", Description: "browse providers & models"},
 	{Name: "/word", Aliases: []string{"/analyze", "/mode"}, Usage: "/word [text]", Description: "toggle word analysis mode"},
 	{Name: "/quit", Aliases: []string{"/exit", "/q"}, Usage: "/quit", Description: "exit application"},
 	{Name: "/help", Aliases: []string{"/?"}, Usage: "/help", Description: "show available commands"},
@@ -151,25 +155,58 @@ func slashArgQuery(value string) (cmd, arg string, ok bool) {
 		cmd = strings.ToLower(line)
 	}
 	switch cmd {
-	case "/provider", "/model":
+	case "/models":
 		return cmd, arg, true
 	}
 	return "", "", false
 }
 
+// filterByPrefix keeps backward-compatible name but now supports search
+// (case-insensitive substring matching) in addition to prefix matching.
 func filterByPrefix(items []string, prefix string) []string {
-	prefix = strings.ToLower(strings.TrimSpace(prefix))
-	if prefix == "" {
+	return filterBySearch(items, prefix)
+}
+
+// filterBySearch filters items by a case-insensitive search query. The query
+// may contain multiple space-separated terms; an item matches when it contains
+// every term. An empty query returns all items.
+func filterBySearch(items []string, query string) []string {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
 		return items
 	}
+	terms := strings.Fields(query)
 	var filtered []string
 	for _, item := range items {
-		if strings.HasPrefix(strings.ToLower(item), prefix) {
+		lower := strings.ToLower(item)
+		ok := true
+		for _, term := range terms {
+			if !strings.Contains(lower, term) {
+				ok = false
+				break
+			}
+		}
+		if ok {
 			filtered = append(filtered, item)
 		}
 	}
+	if filtered == nil {
+		filtered = []string{}
+	}
 	return filtered
 }
+
+// Aliases for common naming variants used by search/filter helpers.
+func filterByContains(items []string, query string) []string { return filterBySearch(items, query) }
+func filterItems(items []string, query string) []string      { return filterBySearch(items, query) }
+func searchItems(items []string, query string) []string      { return filterBySearch(items, query) }
+
+// Exported aliases.
+func FilterByPrefix(items []string, query string) []string   { return filterByPrefix(items, query) }
+func FilterBySearch(items []string, query string) []string   { return filterBySearch(items, query) }
+func FilterByContains(items []string, query string) []string { return filterByContains(items, query) }
+func FilterItems(items []string, query string) []string      { return filterItems(items, query) }
+func SearchItems(items []string, query string) []string      { return searchItems(items, query) }
 
 type Model struct {
 	app *app.App
@@ -216,6 +253,16 @@ type Model struct {
 	suggestIdx      int
 	filterExcellent bool
 
+	// unified models browser (/models)
+	showModelsBrowser bool
+	mbFocus           string // "provider" | "model"
+	mbProviderIdx     int
+	mbModelIdx        int
+	mbSearchInput     textinput.Model
+
+	// result viewport scroll
+	resultScroll int
+
 	styles Styles
 }
 
@@ -258,6 +305,14 @@ func NewModel(a *app.App) Model {
 	ai.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextPrimary))
 	ai.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextMuted))
 
+	si := textinput.New()
+	si.Placeholder = "search models..."
+	si.CharLimit = 64
+	si.Prompt = "Search: "
+	si.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorPrimary)).Bold(true)
+	si.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextPrimary))
+	si.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextMuted))
+
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorWarning))
@@ -280,6 +335,7 @@ func NewModel(a *app.App) Model {
 		modelInput:      ti,
 		highlightInput:  hi,
 		apiKeyInput:     ai,
+		mbSearchInput:   si,
 		spinner:         sp,
 		langs:           langs,
 		langIdx:         idx,
@@ -287,6 +343,7 @@ func NewModel(a *app.App) Model {
 		styles:          styles,
 		suggestIdx:      -1,
 		filterExcellent: false,
+		mbFocus:         "provider",
 	}
 }
 
@@ -308,73 +365,9 @@ func (m Model) cardWidth() int {
 // suggestionItems returns the current suggestion list and its kind.
 func (m *Model) suggestionItems() (kind string, items []string, title, hint string) {
 	val := m.input.Value()
-	if cmd, arg, ok := slashArgQuery(val); ok {
-		switch cmd {
-		case "/provider":
-			title = "PROVIDERS"
-			items = filterByPrefix(m.providerNames(), arg)
-			hint = "↑↓ navigate · Tab/Enter select · Esc dismiss"
-			return "provider", items, title, hint
-		case "/model":
-			title = "MODELS · " + strings.ToUpper(m.app.Provider)
-			var all []string
-			if m.filterExcellent {
-				all = m.app.ModelsForProviderFiltered(m.app.Provider, true)
-				// merge cached models filtered
-				cached := filterByPrefix(m.modelsForProvider(m.app.Provider), "")
-				var excellentCached []string
-				for _, c := range cached {
-					if app.IsTranslationExcellent(c) {
-						excellentCached = append(excellentCached, c)
-					}
-				}
-				// dedup merge
-				seen := map[string]bool{}
-				for _, v := range all {
-					seen[v] = true
-				}
-				for _, v := range excellentCached {
-					if !seen[v] {
-						all = append(all, v)
-					}
-				}
-				sort.Strings(all)
-				// re-sort excellent first
-				var ex, other []string
-				for _, v := range all {
-					if app.IsTranslationExcellent(v) {
-						ex = append(ex, v)
-					} else {
-						other = append(other, v)
-					}
-				}
-				sort.Strings(ex)
-				sort.Strings(other)
-				all = append(ex, other...)
-			} else {
-				all = m.modelsForProvider(m.app.Provider)
-				// prioritize translation excellent
-				var ex, other []string
-				for _, v := range all {
-					if app.IsTranslationExcellent(v) {
-						ex = append(ex, v)
-					} else {
-						other = append(other, v)
-					}
-				}
-				sort.Strings(ex)
-				sort.Strings(other)
-				all = append(ex, other...)
-			}
-			items = filterByPrefix(all, arg)
-			hint = "↑↓ navigate · Tab/Enter select"
-			if m.filterExcellent {
-				hint += " · Ctrl+T show all"
-			} else {
-				hint += " · Ctrl+T filter translation"
-			}
-			return "model", items, title, hint
-		}
+	if cmd, _, ok := slashArgQuery(val); ok {
+		// only /models has arg handling now; legacy /model and /provider removed
+		_ = cmd
 	}
 	sugs := slashSuggestionsFor(val)
 	if len(sugs) > 0 {
@@ -545,6 +538,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// API key overlay has highest priority
 		if m.showAPIKey {
 			switch msg.String() {
+			case "ctrl+d":
+				if m.cancel != nil {
+					m.cancel()
+				}
+				return m, tea.Quit
+			case "ctrl+c":
+				m.showAPIKey = false
+				m.apiKeyInput.SetValue("")
+				m.apiKeyErr = ""
+				m.pendingProvider = ""
+				m.status = "cancelled"
+				return m, nil
 			case "enter":
 				key := strings.TrimSpace(m.apiKeyInput.Value())
 				if key == "" {
@@ -580,6 +585,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Model overlay
 		if m.showModel {
 			switch msg.String() {
+			case "ctrl+d":
+				if m.cancel != nil {
+					m.cancel()
+				}
+				return m, tea.Quit
+			case "ctrl+c":
+				m.showModel = false
+				m.modelInput.SetValue("")
+				return m, nil
 			case "enter":
 				val := strings.TrimSpace(m.modelInput.Value())
 				if val != "" {
@@ -601,6 +615,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Highlight overlay
 		if m.showHighlight {
 			switch msg.String() {
+			case "ctrl+d":
+				if m.cancel != nil {
+					m.cancel()
+				}
+				return m, tea.Quit
+			case "ctrl+c":
+				m.showHighlight = false
+				return m, nil
 			case "enter":
 				m.highlightQuery = strings.TrimSpace(m.highlightInput.Value())
 				m.showHighlight = false
@@ -611,6 +633,167 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			m.highlightInput, cmd = m.highlightInput.Update(msg)
+			return m, cmd
+		}
+
+		// Unified models browser (/models)
+		if m.showModelsBrowser {
+			providers := m.providerNames()
+			// clamp indices
+			if len(providers) == 0 {
+				if msg.String() == "esc" || msg.String() == "ctrl+c" {
+					m.showModelsBrowser = false
+					m.mbSearchInput.Blur()
+					m.input.Focus()
+					return m, nil
+				}
+				return m, nil
+			}
+			if m.mbProviderIdx < 0 {
+				m.mbProviderIdx = 0
+			}
+			if m.mbProviderIdx >= len(providers) {
+				m.mbProviderIdx = len(providers) - 1
+			}
+			selectedProv := providers[m.mbProviderIdx]
+			models := m.mbFilteredModels(selectedProv)
+
+			switch msg.String() {
+			case "esc":
+				m.showModelsBrowser = false
+				m.mbSearchInput.Blur()
+				m.input.Focus()
+				m.status = "cancelled"
+				return m, nil
+			case "ctrl+d":
+				if m.cancel != nil {
+					m.cancel()
+				}
+				return m, tea.Quit
+			case "ctrl+c":
+				// inside browser, delete search input
+				m.mbSearchInput.SetValue("")
+				m.mbModelIdx = 0
+				return m, nil
+			case "left", "right":
+				if m.mbFocus == "provider" {
+					m.mbFocus = "model"
+					if len(models) > 0 && m.mbModelIdx < 0 {
+						m.mbModelIdx = 0
+					}
+				} else {
+					m.mbFocus = "provider"
+				}
+				return m, nil
+			case "up", "ctrl+p":
+				if m.mbFocus == "provider" {
+					if len(providers) > 0 {
+						m.mbProviderIdx--
+						if m.mbProviderIdx < 0 {
+							m.mbProviderIdx = len(providers) - 1
+						}
+						m.mbModelIdx = 0
+					}
+				} else {
+					if len(models) > 0 {
+						m.mbModelIdx--
+						if m.mbModelIdx < 0 {
+							m.mbModelIdx = len(models) - 1
+						}
+					}
+				}
+				return m, nil
+			case "down", "ctrl+n":
+				if m.mbFocus == "provider" {
+					if len(providers) > 0 {
+						m.mbProviderIdx++
+						if m.mbProviderIdx >= len(providers) {
+							m.mbProviderIdx = 0
+						}
+						m.mbModelIdx = 0
+					}
+				} else {
+					if len(models) > 0 {
+						m.mbModelIdx++
+						if m.mbModelIdx >= len(models) {
+							m.mbModelIdx = 0
+						}
+					}
+				}
+				return m, nil
+			case "enter":
+				if m.mbFocus == "provider" {
+					// shift focus to models for selected provider
+					if len(models) == 0 {
+						// try fetching models then stay
+						m.mbFocus = "model"
+						return m, m.fetchModelsCmd(selectedProv)
+					}
+					m.mbFocus = "model"
+					if m.mbModelIdx < 0 || m.mbModelIdx >= len(models) {
+						m.mbModelIdx = 0
+					}
+					// fetch in background to refresh
+					return m, m.fetchModelsCmd(selectedProv)
+				}
+				// focus == model -> confirm selection
+				if len(models) > 0 && m.mbModelIdx >= 0 && m.mbModelIdx < len(models) {
+					chosenModel := models[m.mbModelIdx]
+					chosenProvider := selectedProv
+					// handle API key requirement
+					if config.ProviderRequiresKey(chosenProvider) && !m.app.HasAPIKey(chosenProvider) {
+						m.showModelsBrowser = false
+						m.mbSearchInput.Blur()
+						m.pendingProvider = chosenProvider
+						m.showAPIKey = true
+						m.apiKeyInput.SetValue("")
+						m.apiKeyInput.Focus()
+						m.apiKeyErr = ""
+						m.status = "paste API key for " + chosenProvider + " to connect"
+						// store chosen model to apply after key?
+						// will set model after provider connects; for now just set provider after key
+						return m, nil
+					}
+					m.app.SetProvider(chosenProvider)
+					m.app.SetModel(chosenModel)
+					m.status = "provider " + chosenProvider + " · model " + chosenModel
+					m.showModelsBrowser = false
+					m.mbSearchInput.SetValue("")
+					m.mbSearchInput.Blur()
+					m.input.Focus()
+					m.input.SetValue("")
+					return m, m.fetchModelsCmd(chosenProvider)
+				}
+				return m, nil
+			case "ctrl+t":
+				m.filterExcellent = !m.filterExcellent
+				m.mbModelIdx = 0
+				if m.filterExcellent {
+					m.status = "filtering translation-optimized models"
+				} else {
+					m.status = "showing all models"
+				}
+				return m, nil
+			case "ctrl+e":
+				m.showModelsBrowser = false
+				m.mbSearchInput.Blur()
+				m.pendingProvider = selectedProv
+				m.showAPIKey = true
+				m.apiKeyInput.SetValue("")
+				m.apiKeyInput.Focus()
+				m.apiKeyErr = ""
+				m.status = "paste API key for " + selectedProv + " — Enter to save, Esc to cancel (Ctrl+E)"
+				return m, nil
+			}
+			// For all other keys, forward to search input (typing to filter)
+			// Backspace, runes, etc.
+			prev := m.mbSearchInput.Value()
+			var cmd tea.Cmd
+			m.mbSearchInput, cmd = m.mbSearchInput.Update(msg)
+			if m.mbSearchInput.Value() != prev {
+				m.mbModelIdx = 0
+			}
+			// Do not propagate to textarea
 			return m, cmd
 		}
 
@@ -686,11 +869,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Main keybindings
 		switch msg.String() {
-		case "ctrl+c":
+		case "ctrl+d":
 			if m.cancel != nil {
 				m.cancel()
 			}
 			return m, tea.Quit
+
+		case "ctrl+c":
+			// delete content input (clear textarea and result)
+			if m.loading && m.cancel != nil {
+				m.cancel()
+				m.loading = false
+				m.status = "cancelled"
+			}
+			m.input.SetValue("")
+			m.result = ""
+			m.analysisResult = nil
+			m.resultScroll = 0
+			m.status = ""
+			m.input.Focus()
+			return m, nil
 
 		case "esc":
 			if m.highlightQuery != "" {
@@ -724,6 +922,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.result = ""
 			m.analysisResult = nil
+			m.resultScroll = 0
 			m.status = ""
 			m.manager = managerNone
 			m.suggestIdx = -1
@@ -746,11 +945,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.highlightInput.Focus()
 			return m, nil
 
+		case "ctrl+e":
+			prov := m.app.Provider
+			if prov == "" {
+				provs := m.providerNames()
+				if len(provs) > 0 {
+					prov = provs[0]
+				}
+			}
+			m.pendingProvider = prov
+			m.showAPIKey = true
+			m.apiKeyInput.SetValue("")
+			m.apiKeyInput.Focus()
+			m.apiKeyErr = ""
+			m.input.Blur()
+			m.status = "paste API key for " + prov + " — Enter to save, Esc to cancel (Ctrl+E)"
+			return m, nil
+
 		case "ctrl+y":
 			if m.result != "" {
 				_ = clipboard.WriteAll(m.result)
 				m.status = "copied"
 			}
+			return m, nil
+
+		case "pgup", "ctrl+u", "alt+up":
+			if m.resultScroll > 0 {
+				m.resultScroll--
+				if m.resultScroll < 0 {
+					m.resultScroll = 0
+				}
+			}
+			return m, nil
+		case "pgdown", "alt+down", "ctrl+down":
+			m.resultScroll++
 			return m, nil
 
 		case "ctrl+s", "ctrl+enter", "alt+enter", "ctrl+j":
@@ -818,6 +1046,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.cancel = nil
 		m.status = "done"
+		m.resultScroll = 0
+		// auto copy selected output translation
+		if m.app.Config.AutoCopy && strings.TrimSpace(m.result) != "" {
+			_ = clipboard.WriteAll(strings.TrimSpace(m.result))
+			m.status = "auto-copied ✓"
+		}
 		return m, nil
 
 	case analysisDoneMsg:
@@ -829,6 +1063,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.analysisResult = &msg.res
 		m.result = formatAnalysis(msg.res)
 		m.status = "done"
+		m.resultScroll = 0
+		if m.app.Config.AutoCopy && strings.TrimSpace(m.result) != "" {
+			_ = clipboard.WriteAll(strings.TrimSpace(m.result))
+			m.status = "auto-copied ✓"
+		}
 		return m, nil
 
 	case modelsListedMsg:
@@ -877,6 +1116,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	m.suggestIdx = -1
 	m.result = ""
 	m.analysisResult = nil
+	m.resultScroll = 0
 	m.status = "translating..."
 	m.loading = true
 
@@ -925,6 +1165,116 @@ func (m Model) fetchModelsCmd(provider string) tea.Cmd {
 
 func (m Model) providerNames() []string {
 	return m.app.ProviderNames()
+}
+
+func (m Model) FilterByPrefix(items []string, query string) []string {
+	return filterByPrefix(items, query)
+}
+func (m Model) FilterBySearch(items []string, query string) []string {
+	return filterBySearch(items, query)
+}
+func (m Model) FilterByContains(items []string, query string) []string {
+	return filterByContains(items, query)
+}
+
+func (m Model) SearchModels(args ...string) []string {
+	if len(args) == 0 {
+		return m.searchModels("")
+	}
+	if len(args) == 1 {
+		return m.searchModels(args[0])
+	}
+	return m.searchModelsForProvider(args[0], args[1])
+}
+func (m Model) SearchModelsForProvider(args ...string) []string {
+	if len(args) == 0 {
+		return m.searchModelsForProvider(m.app.Provider, "")
+	}
+	if len(args) == 1 {
+		// ambiguous: treat as query for active provider
+		return m.searchModelsForProvider(m.app.Provider, args[0])
+	}
+	return m.searchModelsForProvider(args[0], args[1])
+}
+func (m Model) SearchProviders(args ...string) []string {
+	query := ""
+	if len(args) > 0 {
+		query = args[0]
+	}
+	return m.searchProviders(query)
+}
+
+func (m Model) searchModels(query string) []string {
+	return filterBySearch(m.modelsForProvider(m.app.Provider), query)
+}
+
+func (m Model) searchModelsForProvider(name, query string) []string {
+	return filterBySearch(m.modelsForProvider(name), query)
+}
+
+func (m Model) searchProviders(query string) []string {
+	return filterBySearch(m.providerNames(), query)
+}
+
+func (m *Model) mbFilteredModels(provider string) []string {
+	all := m.modelsForProvider(provider)
+	// apply excellent filter if active
+	if m.filterExcellent {
+		var filtered []string
+		for _, v := range all {
+			if app.IsTranslationExcellent(v) {
+				filtered = append(filtered, v)
+			}
+		}
+		all = filtered
+		// if filtering yields empty, keep original sort but empty
+	}
+	// apply search query from browser
+	query := strings.TrimSpace(m.mbSearchInput.Value())
+	if query != "" {
+		all = filterBySearch(all, query)
+	}
+	// prioritize excellent first when not filtered
+	if !m.filterExcellent {
+		var ex, other []string
+		for _, v := range all {
+			if app.IsTranslationExcellent(v) {
+				ex = append(ex, v)
+			} else {
+				other = append(other, v)
+			}
+		}
+		sort.Strings(ex)
+		sort.Strings(other)
+		all = append(ex, other...)
+	} else {
+		sort.Strings(all)
+	}
+	return all
+}
+
+func (m *Model) openModelsBrowser() tea.Cmd {
+	providers := m.providerNames()
+	idx := 0
+	for i, p := range providers {
+		if p == m.app.Provider {
+			idx = i
+			break
+		}
+	}
+	m.showModelsBrowser = true
+	m.mbFocus = "provider"
+	m.mbProviderIdx = idx
+	m.mbModelIdx = 0
+	m.mbSearchInput.SetValue("")
+	m.mbSearchInput.Focus()
+	m.input.Blur()
+	m.status = "↑↓ navigate · ←→ switch panes · Enter select · Esc close · type to search · Ctrl+T filter"
+	// fetch models for all providers in background? at least current
+	if len(providers) > 0 {
+		return m.fetchModelsCmd(providers[idx])
+	}
+	return nil
 }
 
 func (m Model) modelsForProvider(name string) []string {
@@ -1016,53 +1366,10 @@ func (m Model) handleSlashCommand(raw string) (tea.Model, tea.Cmd) {
 		}
 		m.status = "target language set to " + strings.ToUpper(string(lang))
 
-	case "/model":
-		if len(args) == 0 {
-			m.manager = managerModels
-			m.status = "select a model with /model <name>  ·  Ctrl+T filter translation"
-			restoreRetained()
-			return m, m.fetchModelsCmd(m.app.Provider)
-		}
-		name := strings.Join(args, " ")
-		m.app.SetModel(name)
-		m.status = "model set to " + name
-
-	case "/provider":
-		if len(args) == 0 {
-			m.manager = managerProviders
-			m.status = "select a provider with /provider <name>"
-			restoreRetained()
-			return m, nil
-		}
-		name := args[0]
-		// Inline key paste: "/provider openai sk-..." sets key directly and connects.
-		if len(args) >= 2 && config.ProviderRequiresKey(name) {
-			inlineKey := strings.Join(args[1:], " ")
-			inlineKey = strings.TrimSpace(inlineKey)
-			if len(inlineKey) > 8 {
-				if err := m.app.SetProviderAPIKey(name, inlineKey); err == nil {
-					m.app.SetProvider(name)
-					m.status = "provider " + name + " connected (key saved)"
-					restoreRetained()
-					return m, m.fetchModelsCmd(name)
-				}
-			}
-		}
-		// If provider requires API key and none configured, prompt securely.
-		if config.ProviderRequiresKey(name) && !m.app.HasAPIKey(name) {
-			m.pendingProvider = name
-			m.showAPIKey = true
-			m.apiKeyInput.SetValue("")
-			m.apiKeyInput.Focus()
-			m.apiKeyErr = ""
-			m.status = "paste API key for " + name + " to connect"
-			restoreRetained()
-			return m, nil
-		}
-		m.app.SetProvider(name)
-		m.status = "provider set to " + name
+	case "/models":
+		// unified provider+model browser
 		restoreRetained()
-		return m, m.fetchModelsCmd(name)
+		return m, m.openModelsBrowser()
 
 	case "/word", "/analyze", "/mode":
 		if len(args) > 0 {
@@ -1090,7 +1397,7 @@ func (m Model) handleSlashCommand(raw string) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "/help", "/?":
-		m.status = "commands: /to <lang>  /model <name>  /provider <name>  /word [text]  /help"
+		m.status = "commands: /to <lang>  /models  /word [text]  /help  · Ctrl+E add API key"
 		restoreRetained()
 
 	default:
@@ -1182,6 +1489,9 @@ func (m Model) View() string {
 			"Enter to apply  •  Esc to dismiss",
 		)
 	}
+	if m.showModelsBrowser {
+		return m.renderModelsBrowser()
+	}
 
 	// 2. Header Bar
 	headerBar := m.renderHeader(cardWidth)
@@ -1194,28 +1504,29 @@ func (m Model) View() string {
 	// 4. Result Section Card
 	resultCard := m.renderResultCard(cardWidth)
 
-	// 5. Status Line
+	// 5. Status Line — fixed height to prevent jumping
 	statusLine := m.renderStatusLine()
-
-	// 6. Help / Keybindings Footer — hidden when idle preview is shown inside
-	// the fixed input frame to avoid duplication (preview already says
-	// "Type / for commands | Alt+Enter ...").
+	// pad to fixedStatusLines (1) even when empty to keep frame stable
+	if statusLine == "" {
+		statusLine = " "
+	}
+	// 6. Help / Keybindings Footer — fixed height; keep placeholder when idle to avoid jump
 	footer := m.renderFooter(cardWidth)
+	// do not hide footer to keep frame locked; show subtle placeholder when idle
 	if kind, _, _, _ := m.suggestionItems(); kind == "" && m.manager == managerNone {
-		footer = ""
+		// keep same height but render empty muted line to preserve lock
+		footer = lipgloss.NewStyle().Width(cardWidth).Align(lipgloss.Center).Foreground(lipgloss.Color(ColorTextMuted)).Render(" ")
 	}
 
-	// Assemble Main Content — input frame is fixed height, so no shift when "/" is typed.
+	// Assemble Main Content — all frames are fixed height, so layout never jumps.
 	var b strings.Builder
 	b.WriteString(headerBar)
 	b.WriteString("\n\n")
 	b.WriteString(inputFrame)
 	b.WriteString("\n\n")
 	b.WriteString(resultCard)
-	if statusLine != "" {
-		b.WriteString("\n")
-		b.WriteString(statusLine)
-	}
+	b.WriteString("\n")
+	b.WriteString(statusLine)
 	b.WriteString("\n\n")
 	b.WriteString(footer)
 
@@ -1775,8 +2086,100 @@ func (m Model) renderResultCard(cardWidth int) string {
 		content = m.styles.EmptyState.Render("Results will appear here. Press Alt+Enter to submit.")
 	}
 
-	boxStyle := m.styles.CardBox.Width(cardWidth)
-	return boxStyle.Render(headerRow + "\n" + content)
+	// Wrap content to width and build scrollable viewport with fixed height.
+	// Simple word-wrap: split long lines to fit cardWidth-4
+	var wrapped []string
+	for _, line := range strings.Split(content, "\n") {
+		if line == "" {
+			wrapped = append(wrapped, "")
+			continue
+		}
+		// preserve ANSI? Use plain width
+		w := lipgloss.Width(line)
+		avail := cardWidth - 4
+		if avail < 20 {
+			avail = 20
+		}
+		if w <= avail {
+			wrapped = append(wrapped, line)
+		} else {
+			// naive wrap: split by avail runes
+			runes := []rune(line)
+			for len(runes) > 0 {
+				cut := avail
+				if cut > len(runes) {
+					cut = len(runes)
+				}
+				// try to break at space
+				if len(runes) > avail {
+					for i := avail - 1; i >= avail-10 && i >= 0; i-- {
+						if runes[i] == ' ' {
+							cut = i + 1
+							break
+						}
+					}
+				}
+				wrapped = append(wrapped, string(runes[:cut]))
+				runes = runes[cut:]
+			}
+		}
+	}
+	// Clamp scroll offset
+	maxScroll := 0
+	if len(wrapped) > fixedResultContentLines {
+		maxScroll = len(wrapped) - fixedResultContentLines
+	}
+	if m.resultScroll < 0 {
+		m.resultScroll = 0
+	}
+	if m.resultScroll > maxScroll {
+		m.resultScroll = maxScroll
+	}
+	// Slice viewport
+	end := m.resultScroll + fixedResultContentLines
+	if end > len(wrapped) {
+		end = len(wrapped)
+	}
+	viewport := make([]string, fixedResultContentLines)
+	for i := 0; i < fixedResultContentLines; i++ {
+		idx := m.resultScroll + i
+		if idx < len(wrapped) {
+			viewport[i] = wrapped[idx]
+		} else {
+			viewport[i] = ""
+		}
+	}
+	// Add scroll indicator in last line if needed
+	if maxScroll > 0 {
+		indicator := fmt.Sprintf(" ↕ %d/%d ", m.resultScroll+1, maxScroll+1)
+		meta := m.styles.BoxMeta.Render(indicator)
+		// overlay indicator on last viewport line
+		last := viewport[fixedResultContentLines-1]
+		if last == "" {
+			viewport[fixedResultContentLines-1] = meta
+		} else {
+			// append indicator if space
+			if lipgloss.Width(last)+lipgloss.Width(meta) < cardWidth-4 {
+				viewport[fixedResultContentLines-1] = last + " " + meta
+			} else {
+				viewport[fixedResultContentLines-1] = meta
+			}
+		}
+	}
+	content = strings.Join(viewport, "\n")
+
+	inner := headerRow + "\n" + content
+	innerLines := strings.Split(inner, "\n")
+	for len(innerLines) < fixedResultInnerLines {
+		innerLines = append(innerLines, "")
+	}
+	if len(innerLines) > fixedResultInnerLines {
+		innerLines = innerLines[:fixedResultInnerLines]
+	}
+	inner = strings.Join(innerLines, "\n")
+
+	boxStyle := m.styles.CardBox.Width(cardWidth).Height(fixedResultInnerLines + 2) // +2 for border
+	return boxStyle.Render(inner)
 }
 
 func (m Model) renderStatusLine() string {
@@ -1786,11 +2189,11 @@ func (m Model) renderStatusLine() string {
 	noticePrefixes := []string{
 		"select a ", "target language set to ", "model set to ", "provider set to ",
 		"word analysis mode", "quick translation mode", "filtering", "showing all",
-		"provider ", "paste API",
+		"provider ", "paste API", "auto-copied",
 	}
 	for _, prefix := range noticePrefixes {
 		if strings.HasPrefix(m.status, prefix) {
-			return m.styles.BoxMeta.Render(m.status)
+			return m.styles.StatusSuccess.Render("✓ " + m.status)
 		}
 	}
 	switch m.status {
@@ -1806,7 +2209,7 @@ func (m Model) renderStatusLine() string {
 }
 
 func (m Model) renderFooter(cardWidth int) string {
-	footerText := "Type / for commands  |  Alt+Enter to submit  |  Tab switch mode  •  Esc clear"
+	footerText := "Type / for commands  |  Alt+Enter submit  |  Tab mode  •  Ctrl+C clear  •  Ctrl+D exit  •  PgUp/Dn scroll"
 	return lipgloss.NewStyle().Width(cardWidth).Align(lipgloss.Center).Foreground(lipgloss.Color(ColorTextMuted)).Render(footerText)
 }
 
@@ -1827,6 +2230,223 @@ func (m Model) renderModal(title, label, inputView, hint string) string {
 		height = 24
 	}
 
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modalBox)
+}
+
+func (m Model) renderModelsBrowser() string {
+	providers := m.providerNames()
+	selectedProv := ""
+	if len(providers) > 0 && m.mbProviderIdx >= 0 && m.mbProviderIdx < len(providers) {
+		selectedProv = providers[m.mbProviderIdx]
+	}
+	models := m.mbFilteredModels(selectedProv)
+
+	width := m.width
+	if width == 0 {
+		width = 80
+	}
+	height := m.height
+	if height == 0 {
+		height = 24
+	}
+	// modal width: use most of terminal but capped
+	modalWidth := width - 6
+	if modalWidth > 90 {
+		modalWidth = 90
+	}
+	if modalWidth < 60 {
+		modalWidth = 60
+	}
+	// ModalBox has Padding(1,2) and border => inner width ≈ modalWidth-6
+	innerAvail := modalWidth - 6
+	if innerAvail < 42 {
+		innerAvail = 42
+	}
+	leftW := innerAvail/3 - 2
+	if leftW < 16 {
+		leftW = 16
+	}
+	rightW := innerAvail - leftW - 2 // gap between panes
+	if rightW < 24 {
+		rightW = 24
+	}
+
+	title := m.styles.ModalTitle.Render("Providers & Models  —  /models")
+	searchView := m.mbSearchInput.View()
+	hint := m.styles.ModalHint.Render("↑↓ navigate · ←→ switch panes · Enter select/focus · type to filter · Ctrl+T excellent · Esc close")
+	if m.mbFocus == "provider" {
+		hint = m.styles.ModalHint.Render("↑↓ provider · →/Enter → models · type to filter models · Esc close")
+	} else {
+		hint = m.styles.ModalHint.Render("↑↓ model · ← back to providers · Enter confirm · type to filter · Esc close")
+	}
+
+	// Build left pane lines
+	var leftLines []string
+	leftHeader := m.styles.BoxLabel.Render("PROVIDERS")
+	if m.mbFocus == "provider" {
+		leftHeader = m.styles.SuggestActive.Render("▸ PROVIDERS")
+	}
+	leftLines = append(leftLines, leftHeader)
+	if len(providers) == 0 {
+		leftLines = append(leftLines, m.styles.EmptyState.Render("no providers"))
+	} else {
+		// scroll window
+		visCount := 8
+		start := 0
+		if m.mbProviderIdx >= visCount {
+			start = m.mbProviderIdx - visCount + 1
+		}
+		if start+visCount > len(providers) {
+			start = len(providers) - visCount
+		}
+		if start < 0 {
+			start = 0
+		}
+		end := start + visCount
+		if end > len(providers) {
+			end = len(providers)
+		}
+		for i := start; i < end; i++ {
+			p := providers[i]
+			isSel := i == m.mbProviderIdx
+			marker := "  "
+			if p == m.app.Provider {
+				marker = "● "
+			}
+			if isSel && m.mbFocus == "provider" {
+				marker = "▸ "
+			}
+			line := "  " + marker + p
+			if p == m.app.Provider {
+				line += " " + m.styles.BoxMeta.Render("(active)")
+			}
+			if isSel && m.mbFocus == "provider" {
+				line = m.styles.SuggestActive.Render(line)
+			} else if isSel {
+				line = m.styles.SuggestIdle.Render(line)
+			}
+			// trunc
+			if lipgloss.Width(line) > leftW {
+				line = line[:leftW-1] + "…"
+			}
+			leftLines = append(leftLines, line)
+		}
+		if len(providers) > visCount {
+			leftLines = append(leftLines, m.styles.BoxMeta.Render(fmt.Sprintf(" %d/%d", m.mbProviderIdx+1, len(providers))))
+		}
+	}
+
+	var rightLines []string
+	rightTitle := "MODELS"
+	if selectedProv != "" {
+		rightTitle = "MODELS · " + strings.ToUpper(selectedProv)
+	}
+	rightHeader := m.styles.BoxLabel.Render(rightTitle)
+	if m.mbFocus == "model" {
+		rightHeader = m.styles.SuggestActive.Render("▸ " + rightTitle)
+	}
+	rightLines = append(rightLines, rightHeader)
+	if len(models) == 0 {
+		rightLines = append(rightLines, m.styles.EmptyState.Render("no models — type to filter or switch provider"))
+	} else {
+		visCount := 8
+		start := 0
+		if m.mbModelIdx >= visCount {
+			start = m.mbModelIdx - visCount + 1
+		}
+		if start+visCount > len(models) {
+			start = len(models) - visCount
+		}
+		if start < 0 {
+			start = 0
+		}
+		end := start + visCount
+		if end > len(models) {
+			end = len(models)
+		}
+		for i := start; i < end; i++ {
+			name := models[i]
+			isSel := i == m.mbModelIdx
+			marker := "  "
+			if name == m.app.Model && selectedProv == m.app.Provider {
+				marker = "● "
+			}
+			if isSel && m.mbFocus == "model" {
+				marker = "▸ "
+			}
+			line := "  " + marker + name
+			if app.IsTranslationExcellent(name) {
+				line += " " + m.styles.BadgeExcellent.Render("✦")
+			}
+			if name == m.app.Model && selectedProv == m.app.Provider {
+				line += " " + m.styles.BoxMeta.Render("(active)")
+			}
+			if isSel && m.mbFocus == "model" {
+				line = m.styles.SuggestActive.Render(line)
+			}
+			if lipgloss.Width(line) > rightW {
+				line = line[:rightW-1] + "…"
+			}
+			rightLines = append(rightLines, line)
+		}
+		if len(models) > visCount {
+			rightLines = append(rightLines, m.styles.BoxMeta.Render(fmt.Sprintf(" %d/%d · Ctrl+T toggle excellent", m.mbModelIdx+1, len(models))))
+		} else {
+			rightLines = append(rightLines, m.styles.BoxMeta.Render(" Ctrl+T toggle excellent"))
+		}
+	}
+
+	// Pad both to same height
+	maxLines := len(leftLines)
+	if len(rightLines) > maxLines {
+		maxLines = len(rightLines)
+	}
+	for len(leftLines) < maxLines {
+		leftLines = append(leftLines, "")
+	}
+	for len(rightLines) < maxLines {
+		rightLines = append(rightLines, "")
+	}
+
+	leftContent := strings.Join(leftLines, "\n")
+	rightContent := strings.Join(rightLines, "\n")
+
+	// inner panes: simple text columns separated by a subtle vertical line
+	sepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ColorBorderSubtle))
+	separator := sepStyle.Render("│")
+	leftStyle := lipgloss.NewStyle().Width(leftW).Padding(0, 1)
+	rightStyle := lipgloss.NewStyle().Width(rightW).Padding(0, 1)
+	// highlight focused pane header already via SuggestActive
+	leftBox := leftStyle.Render(leftContent)
+	rightBox := rightStyle.Render(rightContent)
+	// build columns line-by-line to ensure alignment
+	leftLinesArr := strings.Split(leftBox, "\n")
+	rightLinesArr := strings.Split(rightBox, "\n")
+	maxH := len(leftLinesArr)
+	if len(rightLinesArr) > maxH {
+		maxH = len(rightLinesArr)
+	}
+	for len(leftLinesArr) < maxH {
+		leftLinesArr = append(leftLinesArr, strings.Repeat(" ", leftW))
+	}
+	for len(rightLinesArr) < maxH {
+		rightLinesArr = append(rightLinesArr, "")
+	}
+	var colLines []string
+	for i := 0; i < maxH; i++ {
+		l := leftLinesArr[i]
+		r := ""
+		if i < len(rightLinesArr) {
+			r = rightLinesArr[i]
+		}
+		if i == 0 {
+			// header line has no separator? keep it
+		}
+		colLines = append(colLines, l+" "+separator+" "+r)
+	}
+	columns := strings.Join(colLines, "\n")
+	modalContent := fmt.Sprintf("%s\n\n%s\n\n%s\n\n%s", title, searchView, columns, hint)
+	modalBox := m.styles.ModalBox.Width(modalWidth).Render(modalContent)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modalBox)
 }
 

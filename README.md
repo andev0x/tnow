@@ -55,8 +55,9 @@ Keys:
 - Tab: switch mode (Quick/Analyze)
 - Ctrl+Y: copy result
 - Ctrl+L: cycle target language
-- Ctrl+M: set model
-- Esc: cancel
+- Ctrl+M / Alt+M: set model
+- Ctrl+H: highlight text or section (Esc to clear)
+- Esc: cancel / clear highlight
 - Ctrl+C: quit
 
 ## Providers

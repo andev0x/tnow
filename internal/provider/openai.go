@@ -33,6 +33,63 @@ func NewOpenAICompatible(cfg Config) *OpenAICompatible {
 
 func (p *OpenAICompatible) Name() string { return p.cfg.Name }
 
+// ListModels returns the models exposed by an OpenAI-compatible endpoint.
+func (p *OpenAICompatible) ListModels(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.cfg.BaseURL+"/models", nil)
+	if err != nil {
+		return nil, &runtime.RuntimeError{Kind: runtime.ErrNetwork, Err: err}
+	}
+	if p.cfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.cfg.APIKey)
+	}
+	if p.cfg.Org != "" {
+		req.Header.Set("OpenAI-Organization", p.cfg.Org)
+	}
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		kind := runtime.ErrNetwork
+		if ctx.Err() != nil {
+			if ctx.Err() == context.Canceled {
+				kind = runtime.ErrCancellation
+			} else {
+				kind = runtime.ErrTimeout
+			}
+		}
+		return nil, &runtime.RuntimeError{Kind: kind, Err: err}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		kind := runtime.ErrModel
+		if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			kind = runtime.ErrAuth
+		}
+		return nil, &runtime.RuntimeError{Kind: kind, Err: fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))}
+	}
+
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, &runtime.RuntimeError{Kind: runtime.ErrModel, Err: err}
+	}
+
+	seen := make(map[string]bool)
+	var models []string
+	for _, m := range payload.Data {
+		if m.ID == "" || seen[m.ID] {
+			continue
+		}
+		seen[m.ID] = true
+		models = append(models, m.ID)
+	}
+	return models, nil
+}
+
 type oaiMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`

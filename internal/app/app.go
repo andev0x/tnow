@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"sort"
 	"time"
 
 	"github.com/andev0x/tnow/internal/analysis"
@@ -92,6 +94,57 @@ func (a *App) SetTarget(lang language.Language) {
 
 func (a *App) SetSource(lang language.Language) {
 	a.SourceLang = lang
+}
+
+// ProviderNames returns the configured providers in a stable order.
+func (a *App) ProviderNames() []string {
+	seen := make(map[string]bool)
+	var names []string
+	add := func(name string) {
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	for _, pc := range a.Config.Providers {
+		add(pc.Name)
+	}
+	for name := range a.Runtime.Providers {
+		add(name)
+	}
+	add(a.Provider)
+	sort.Strings(names)
+	return names
+}
+
+// ModelsForProvider returns locally configured models for a provider. The
+// active model is included even when it is not present in the config file.
+func (a *App) ModelsForProvider(name string) []string {
+	seen := make(map[string]bool)
+	var models []string
+	add := func(model string) {
+		if model == "" || seen[model] {
+			return
+		}
+		seen[model] = true
+		models = append(models, model)
+	}
+	for _, pc := range a.Config.Providers {
+		if pc.Name == name {
+			add(pc.Model)
+		}
+	}
+	if name == a.Provider {
+		add(a.Model)
+	}
+	sort.Strings(models)
+	return models
+}
+
+// ListModels asks the active provider for the models it exposes.
+func (a *App) ListModels(ctx context.Context) ([]string, error) {
+	return a.Runtime.ListModels(ctx, a.Provider)
 }
 
 func timeDuration(sec int) time.Duration {

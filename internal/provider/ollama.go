@@ -33,6 +33,55 @@ func NewOllama(cfg Config) *Ollama {
 
 func (p *Ollama) Name() string { return "ollama" }
 
+// ListModels returns the models installed in the local Ollama instance.
+func (p *Ollama) ListModels(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.cfg.BaseURL+"/api/tags", nil)
+	if err != nil {
+		return nil, &runtime.RuntimeError{Kind: runtime.ErrNetwork, Err: err}
+	}
+	resp, err := p.client.Do(req)
+	if err != nil {
+		kind := runtime.ErrNetwork
+		if ctx.Err() == context.Canceled {
+			kind = runtime.ErrCancellation
+		} else if ctx.Err() == context.DeadlineExceeded {
+			kind = runtime.ErrTimeout
+		}
+		return nil, &runtime.RuntimeError{Kind: kind, Err: err}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return nil, &runtime.RuntimeError{Kind: runtime.ErrProviderUnavail, Err: fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))}
+	}
+
+	var payload struct {
+		Models []struct {
+			Name  string `json:"name"`
+			Model string `json:"model"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, &runtime.RuntimeError{Kind: runtime.ErrModel, Err: err}
+	}
+
+	seen := make(map[string]bool)
+	var models []string
+	for _, m := range payload.Models {
+		name := m.Name
+		if name == "" {
+			name = m.Model
+		}
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		models = append(models, name)
+	}
+	return models, nil
+}
+
 type ollamaMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`

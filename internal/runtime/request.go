@@ -1,6 +1,9 @@
 package runtime
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // GenerationRequest is the bounded contract for a single model generation.
 type GenerationRequest struct {
@@ -48,6 +51,11 @@ type Provider interface {
 	Generate(ctx context.Context, req GenerationRequest) (GenerationResult, error)
 }
 
+// ModelLister is implemented by providers that can enumerate their models.
+type ModelLister interface {
+	ListModels(ctx context.Context) ([]string, error)
+}
+
 // Runtime executes bounded generation requests.
 type Runtime struct {
 	Providers map[string]Provider
@@ -60,4 +68,21 @@ func New(providers map[string]Provider, defaultName string) *Runtime {
 		providers = map[string]Provider{}
 	}
 	return &Runtime{Providers: providers, Default: defaultName, Timeout: 60}
+}
+
+// ListModels asks a provider for its available models. Providers that do not
+// support model discovery return a configuration error.
+func (r *Runtime) ListModels(ctx context.Context, providerName string) ([]string, error) {
+	if providerName == "" {
+		providerName = r.Default
+	}
+	p, ok := r.Providers[providerName]
+	if !ok {
+		return nil, &RuntimeError{Kind: ErrConfig, Err: fmt.Errorf("unknown provider %q", providerName)}
+	}
+	lister, ok := p.(ModelLister)
+	if !ok {
+		return nil, &RuntimeError{Kind: ErrConfig, Err: fmt.Errorf("provider %q does not support model listing", providerName)}
+	}
+	return lister.ListModels(ctx)
 }

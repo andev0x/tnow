@@ -125,10 +125,14 @@ func (a *App) SetModel(model string) {
 
 func (a *App) SetTarget(lang language.Language) {
 	a.TargetLang = lang
+	a.Config.TargetLang = string(lang)
+	_ = config.Save(a.Config)
 }
 
 func (a *App) SetSource(lang language.Language) {
 	a.SourceLang = lang
+	a.Config.SourceLang = string(lang)
+	_ = config.Save(a.Config)
 }
 
 // ProviderNames returns the configured providers in a stable order.
@@ -252,16 +256,10 @@ func (a *App) ListModels(ctx context.Context) ([]string, error) {
 	return a.Runtime.ListModels(ctx, a.Provider)
 }
 
-// filterByPrefix is an alias for filterStrings to support legacy prefix callers.
-func filterByPrefix(items []string, query string) []string { return filterStrings(items, query) }
-
 // Exported aliases.
 func FilterByPrefix(items []string, query string) []string { return filterStrings(items, query) }
 func FilterBySearch(items []string, query string) []string { return filterStrings(items, query) }
 func FilterStrings(items []string, query string) []string  { return filterStrings(items, query) }
-
-// filterBySearch is an alias for filterStrings.
-func filterBySearch(items []string, query string) []string { return filterStrings(items, query) }
 
 // filterStrings filters a slice of strings by a case-insensitive search query.
 // Multiple space-separated terms must all be present in the item.

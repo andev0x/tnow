@@ -33,6 +33,7 @@ tnow "Hello world"
 tnow --to vi "The deployment failed unexpectedly."
 echo "Good morning" | tnow --to vi
 tnow --from en --to vi "text"
+tnow --to vietnam "text"
 tnow --word awkward
 tnow --model llama3.2:3b "text"
 tnow --provider ollama "text"
@@ -54,44 +55,62 @@ Type any text and press `Alt+Enter` to translate. No chat — just a bounded ope
 
 | Key | Action |
 |-----|--------|
-| `Enter` | newline inside input |
+| `Enter` | newline inside input; accepts the highlighted suggestion when the menu is open |
 | `Alt+Enter` | submit (also `Ctrl+Enter` / `Ctrl+S` / `Ctrl+J` for compatibility) |
-| `Tab` | switch mode (Quick ↔ Analyze) |
+| `Tab` | switch mode (Quick ↔ Analyze); accepts a suggestion when the menu is open |
 | `Ctrl+Y` | copy result to clipboard |
 | `Ctrl+L` | cycle target language |
 | `Ctrl+M` / `Alt+M` | set model (modal) |
 | `Ctrl+H` | highlight word/section (Esc to clear) |
+| `Ctrl+E` | add or replace the active provider's API key |
 | `Esc` | cancel request / dismiss overlay / clear highlight |
-| `Ctrl+C` | quit |
+| `Ctrl+C` | clear the input and result |
+| `Ctrl+D` | quit |
 | `↑` / `↓` / `Ctrl+P` / `Ctrl+N` | navigate suggestions |
-| `Tab` / `Enter` | accept highlighted suggestion |
+| `Tab` / `Enter` | accept the highlighted suggestion |
 
 ### Autocomplete
 
-Typing `/` opens a stable suggestion menu (fixed height — no layout jump). The list filters as you type:
+The input card has a fixed height. Long drafts wrap and scroll inside it, and an
+empty card shows a placeholder instead of changing size. Typing `/` opens the
+command list in the fixed panel below the input (or inside the input in very
+short panes); opening, filtering, or closing the menu never resizes either card.
+The menu also works when the slash command is on the last line of a longer
+translation draft:
 
-- `/` → all slash commands with inline ghost `↳ /model` (`Tab` to accept)
-- `/m` → `/model`, `/to` → target language, etc.
-- `/model <prefix>` → models for the active provider, filtered by prefix
-- `/provider <prefix>` → available providers
-- `/to <lang>` → switch target language
+- `/` → all slash commands
+- `/m` → matches `/models`
+- `/to <language|country>` → set the target language; accepts codes (`vi`), language names (`vietnamese`), country names (`vietnam`, `south korea`), and country codes (`vn`, `kr`). Typing `/to ` opens the language picker and matches all of these forms.
+- `/models [query]` → open the provider/model browser (aliases `/model`, `/provider`, `/providers`)
 - `/word [text]` → toggle word analysis mode (Tab also toggles)
 - `/quit` → exit (aliases `/exit`, `/q`)
 - `/help` → show help
 
-Navigation is keyboard-only, minimal chrome: `↑↓` to move, `Tab`/`Enter` to complete, `Esc` to dismiss. The dropdown is capped to 5 rows with scroll windowing and padded to a constant height so content below does not shift erratically when the filter narrows.
+Navigation is keyboard-only: `↑↓` to move, `Tab`/`Enter` to accept, `Esc` to
+clear the selection. Enter applies a resolved target immediately; ambiguous
+input keeps the picker open so you can choose. Source language remains `auto`
+by default and is detected from the submitted text. The input, command, and
+result cards all use centered titles and fixed heights derived only from the
+terminal size, so the layout stays stable in split panes and short windows;
+long text scrolls inside the editor and result panel.
 
 ### Models & Providers
 
 ```bash
-/model          # browse models for active provider
-/model gpt-4o   # switch model
-/provider       # browse providers
-/provider openai
+/models          # browse providers and models
+/models gpt-4o   # pre-filter the model list
+/provider openai # open with the OpenAI provider selected
 ```
 
-* **Translation-optimized filtering** — models are sorted with multilingual-translation excellence first (`✦` badge for `gpt-4o`, `claude`, `gemini`, `qwen`, `nllb`, `aya`, `mistral`, `llama3`, `command-r`, etc.). Press `Ctrl+T` inside `/model` suggestions to toggle *only excellent* vs *all*.
-* **Secure provider setup** — if a provider needs an API key and none is configured, `tnow` opens a masked prompt (`•` hidden). Paste the key and press `Enter` to connect; it is saved to `~/.config/tnow/config.yaml` with `0600` permissions and the provider is re-initialized automatically. You can also paste inline: `/provider openai sk-...`.
+The browser keeps providers on the left and the selected provider's models on
+the right. The active model is pinned first, followed by models that are strong
+at multilingual translation. The model details are intentionally compact:
+usage context plus the useful capabilities (`Vision`, `Tools`). The dialog has
+a fixed size; long provider/model lists scroll and end with an overflow marker
+such as `… 12 more` instead of making the box grow or jump.
+
+* **Translation-optimized filtering** — models are sorted with multilingual-translation excellence first (`✦` badge for `gpt-4o`, `claude`, `gemini`, `qwen`, `nllb`, `aya`, `mistral`, `llama3`, `command-r`, etc.). Press `Ctrl+T` in the browser to toggle *only excellent* vs *all*.
+* **Secure provider setup** — select a provider on the left and press `Ctrl+E`. The masked prompt accepts the key and saves it with `0600` permissions to `~/.tnow/config.json` (and the YAML config mirror), then re-initializes the provider and returns to the same browser context. Pressing `Enter` on a model that needs a key also opens the prompt directly.
 
 ## Providers
 
@@ -103,7 +122,7 @@ Supported:
 - Gemini
 - OpenRouter
 
-Configure via `~/.config/tnow/config.yaml` or environment variables:
+Configure via `~/.config/tnow/config.yaml` (mirrored to `~/.tnow/config.json`, where `Ctrl+E` key updates are written) or environment variables:
 
 - `OLLAMA_HOST`
 - `OPENAI_API_KEY`

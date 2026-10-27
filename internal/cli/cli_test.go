@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -82,6 +83,22 @@ func TestCLINoInputReturnsMinus1(t *testing.T) {
 	code := Run(a, []string{}, nil, &out, &errb)
 	if code != -1 {
 		t.Fatalf("code %d", code)
+	}
+}
+
+func TestCLICountryNameLanguage(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TNOW_CONFIG", filepath.Join(dir, "config.yaml"))
+	t.Setenv("TNOW_JSON_CONFIG", filepath.Join(dir, "config.json"))
+
+	a := newTestApp(runtime.GenerationResult{Text: "Xin chào"}, nil)
+	var out, errb bytes.Buffer
+	code := Run(a, []string{"--to", "vietnam", "Hello"}, nil, &out, &errb)
+	if code != 0 {
+		t.Fatalf("code %d err %s", code, errb.String())
+	}
+	if a.TargetLang != language.VI {
+		t.Fatalf("target = %q, want Vietnamese", a.TargetLang)
 	}
 }
 

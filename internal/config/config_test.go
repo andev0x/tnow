@@ -1,7 +1,9 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -21,6 +23,39 @@ func TestLoadMissing(t *testing.T) {
 	}
 	if c.DefaultProvider != "ollama" {
 		t.Fatal("bad")
+	}
+}
+
+func TestSaveWritesJSONMirrorWithPrivatePermissions(t *testing.T) {
+	dir := t.TempDir()
+	jsonPath := filepath.Join(dir, "config.json")
+	t.Setenv("TNOW_CONFIG", filepath.Join(dir, "config.yaml"))
+	t.Setenv("TNOW_JSON_CONFIG", jsonPath)
+
+	cfg := Default()
+	cfg.SetAPIKey("openai", "secret-key")
+	if err := Save(cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	data, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("read JSON mirror: %v", err)
+	}
+	var saved Config
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatalf("parse JSON mirror: %v", err)
+	}
+	provider, ok := saved.Provider("openai")
+	if !ok || provider.APIKey != "secret-key" {
+		t.Fatalf("JSON mirror did not contain the API key: %+v", provider)
+	}
+	info, err := os.Stat(jsonPath)
+	if err != nil {
+		t.Fatalf("stat JSON mirror: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("JSON config permissions = %o, want 600", got)
 	}
 }
 

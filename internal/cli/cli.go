@@ -50,10 +50,10 @@ func Run(a *app.App, args []string, stdin io.Reader, stdout, stderr io.Writer) i
 		a.SetModel(model)
 	}
 	if from != "" {
-		a.SetSource(language.Normalize(from))
+		a.SetSource(resolveLanguage(from))
 	}
 	if to != "" {
-		a.SetTarget(language.Normalize(to))
+		a.SetTarget(resolveLanguage(to))
 	}
 
 	text := strings.Join(fs.Args(), " ")
@@ -100,6 +100,13 @@ func Run(a *app.App, args []string, stdin io.Reader, stdout, stderr io.Writer) i
 	}
 	_, _ = fmt.Fprintln(stdout, res.Text)
 	return 0
+}
+
+func resolveLanguage(value string) language.Language {
+	if lang, ok := language.Resolve(value); ok {
+		return lang
+	}
+	return language.Normalize(value)
 }
 
 func reorderArgs(args []string) []string {

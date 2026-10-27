@@ -68,6 +68,13 @@ func JSONPath() string {
 	return filepath.Join(home, ".tnow", "config.json")
 }
 
+// jsonConfigEnabled reports whether the JSON mirror should participate in
+// loading/saving. Tests can isolate the YAML path with TNOW_CONFIG while still
+// opting into a temporary JSON path through TNOW_JSON_CONFIG.
+func jsonConfigEnabled() bool {
+	return os.Getenv("TNOW_CONFIG") == "" || os.Getenv("TNOW_JSON_CONFIG") != ""
+}
+
 func Load() (Config, error) {
 	cfg := Default()
 	// Try primary YAML path first
@@ -90,7 +97,7 @@ func Load() (Config, error) {
 		}
 	}
 	// Skip JSON fallback when TNOW_CONFIG is set for test isolation
-	useJSON := jp != "" && !(os.Getenv("TNOW_CONFIG") != "" && os.Getenv("TNOW_JSON_CONFIG") == "")
+	useJSON := jp != "" && jsonConfigEnabled()
 	// Sync from JSON if YAML not found, or merge JSON as fallback
 	if !yamlLoaded && useJSON {
 		if data, err := os.ReadFile(jp); err == nil {
@@ -118,7 +125,7 @@ func Load() (Config, error) {
 	}
 	// If YAML was loaded, also check JSON for newer data and merge (JSON wins for providers if present)
 	// Skip JSON sync when TNOW_CONFIG is explicitly set for test isolation unless TNOW_JSON_CONFIG also set
-	if yamlLoaded && jp != "" && !(os.Getenv("TNOW_CONFIG") != "" && os.Getenv("TNOW_JSON_CONFIG") == "") {
+	if yamlLoaded && jp != "" && jsonConfigEnabled() {
 		if data, err := os.ReadFile(jp); err == nil {
 			var jcfg Config
 			if err := json.Unmarshal(data, &jcfg); err == nil && len(jcfg.Providers) > 0 {
@@ -166,9 +173,6 @@ func Load() (Config, error) {
 	}
 	if yamlLoaded && !yamlHasAutoCopy {
 		cfg.AutoCopy = true
-	}
-	if !yamlLoaded && !useJSON {
-		// no file at all, Default already true
 	}
 	applyEnv(&cfg)
 	return cfg, nil
@@ -266,8 +270,11 @@ func Save(cfg Config) error {
 	if err := os.WriteFile(p, data, 0o600); err != nil {
 		return err
 	}
+	if err := os.Chmod(p, 0o600); err != nil {
+		return err
+	}
 	// Sync to JSON path ~/.tnow/config.json (skip when TNOW_CONFIG is set for test isolation)
-	if !(os.Getenv("TNOW_CONFIG") != "" && os.Getenv("TNOW_JSON_CONFIG") == "") {
+	if jsonConfigEnabled() {
 		jp := JSONPath()
 		if jp != "" {
 			jdir := filepath.Dir(jp)
@@ -275,6 +282,7 @@ func Save(cfg Config) error {
 				jdata, err := json.MarshalIndent(cfg, "", "  ")
 				if err == nil {
 					_ = os.WriteFile(jp, jdata, 0o600)
+					_ = os.Chmod(jp, 0o600)
 				}
 			}
 		}
@@ -295,7 +303,10 @@ func SaveJSON(cfg Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(jp, data, 0o600)
+	if err := os.WriteFile(jp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(jp, 0o600)
 }
 
 func LoadJSON() (Config, error) {

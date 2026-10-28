@@ -111,7 +111,7 @@ tnow --to vi "The deployment failed unexpectedly."
 tnow --from en --to ja "Ship it."
 ```
 
-If no target is given, the configured default is used (`vi` on a fresh install).
+If no target is given, the configured default is used (`en` on a fresh install).
 
 ### 3. Pipe text
 
@@ -236,7 +236,7 @@ A JSON mirror is written to `~/.tnow/config.json` for compatibility with the TUI
 default_provider: ollama
 default_model: translategemma:4b
 source_lang: auto
-target_lang: vi
+target_lang: en
 
 theme: tokyo-night
 timeout: 60

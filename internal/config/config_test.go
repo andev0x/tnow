@@ -12,6 +12,9 @@ func TestDefault(t *testing.T) {
 	if c.DefaultProvider != "ollama" {
 		t.Fatal("bad default")
 	}
+	if c.TargetLang != "en" {
+		t.Fatalf("target lang = %q, want en", c.TargetLang)
+	}
 }
 
 func TestLoadMissing(t *testing.T) {

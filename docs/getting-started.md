@@ -55,7 +55,7 @@ Translate text:
 tnow "Hello world"
 ```
 
-On a fresh install, the target language is Vietnamese (`vi`). To choose another target:
+On a fresh install, the target language is English (`en`). To choose another target:
 
 ```bash
 tnow --to ja "Hello world"
@@ -103,7 +103,7 @@ To make a provider the default, edit the config file:
 ```yaml
 default_provider: openai
 default_model: gpt-4o-mini
-target_lang: vi
+target_lang: en
 ```
 
 See [Configuration](configuration.md) for file locations and the full schema.

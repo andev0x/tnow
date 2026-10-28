@@ -305,11 +305,11 @@ func TestLanguagePickerKeepsTargetPinned(t *testing.T) {
 	m.input.SetValue("/to ")
 	m.input.CursorEnd()
 	_, items, _, _ := m.suggestionItems()
-	if len(items) == 0 || items[0] != "vi" {
+	if len(items) == 0 || items[0] != "en" {
 		t.Fatalf("target language should be pinned first, got %v", items)
 	}
 	view := ansi.Strip(m.View())
-	if !strings.Contains(view, "vi · Vietnamese · Vietnam") {
+	if !strings.Contains(view, "en · English · United States") {
 		t.Errorf("pinned language is not visible in the popup:\n%s", view)
 	}
 }

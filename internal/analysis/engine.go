@@ -23,7 +23,7 @@ func NewEngine(rt *runtime.Runtime, provider, model string) *Engine {
 func (e *Engine) Analyze(ctx context.Context, req Request) (Result, error) {
 	target := req.TargetLang
 	if target == "" {
-		target = language.VI
+		target = language.EN
 	}
 	src := req.SourceLang
 	if src == "" {

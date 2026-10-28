@@ -15,7 +15,7 @@ Flags may appear before or after positional text.
 | Flag | Short | Type | Default | Description |
 | --- | --- | --- | --- | --- |
 | `--from` | `-f` | string | config (`auto`) | Source language |
-| `--to` | `-t` | string | config (`vi`) | Target language |
+| `--to` | `-t` | string | config (`en`) | Target language |
 | `--word` | `-w` | bool | `false` | Analyze a word or short phrase |
 | `--model` | `-m` | string | config/provider | Model override for this run |
 | `--provider` | `-p` | string | config (`ollama`) | Provider override for this run |

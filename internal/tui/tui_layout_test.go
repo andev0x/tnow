@@ -432,12 +432,12 @@ func TestToLanguageSuggestions(t *testing.T) {
 	if len(items) != len(language.All()) {
 		t.Errorf("language suggestions = %d, want %d", len(items), len(language.All()))
 	}
-	if len(items) == 0 || items[0] != string(language.VI) {
+	if len(items) == 0 || items[0] != string(language.EN) {
 		t.Errorf("active target should be pinned first, got %v", items)
 	}
 
 	view := ansi.Strip(m.View())
-	for _, want := range []string{"Languages", "vi · Vietnamese · Vietnam"} {
+	for _, want := range []string{"Languages", "en · English · United States"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("language menu missing %q:\n%s", want, view)
 		}

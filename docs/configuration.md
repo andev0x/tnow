@@ -34,7 +34,7 @@ A fresh install behaves as if this configuration were present:
 default_provider: ollama
 default_model: translategemma:4b
 source_lang: auto
-target_lang: vi
+target_lang: en
 
 theme: tokyo-night
 timeout: 60
@@ -61,7 +61,7 @@ default_model: translategemma:4b
 source_lang: auto
 
 # Target language. Accepts codes, names, or country aliases.
-target_lang: vi
+target_lang: en
 
 # TUI theme. See "Themes" below.
 theme: tokyo-night
@@ -331,7 +331,7 @@ OPENAI_API_KEY="$SECRET" TNOW_CONFIG=/tmp/tnow-ci.yaml tnow --provider openai "H
   "default_provider": "openai",
   "default_model": "gpt-4o-mini",
   "source_lang": "auto",
-  "target_lang": "vi",
+  "target_lang": "en",
   "theme": "tokyo-night",
   "timeout": 60,
   "auto_copy": true,

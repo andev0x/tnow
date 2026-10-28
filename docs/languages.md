@@ -125,8 +125,8 @@ tnow --from es --to en "Hola mundo"
 
 ## Target-language defaults
 
-- Fresh config: `vi` (Vietnamese).
-- Analysis mode: falls back to `vi` if no target is configured.
+- Fresh config: `en` (English).
+- Analysis mode: falls back to `en` if no target is configured.
 - The TUI cycles through eight common targets with `Ctrl+L` and can set any supported language through `/to`.
 
 ## Custom language codes

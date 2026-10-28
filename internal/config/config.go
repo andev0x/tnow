@@ -42,7 +42,7 @@ func Default() Config {
 		DefaultProvider: "ollama",
 		DefaultModel:    "translategemma:4b",
 		SourceLang:      "auto",
-		TargetLang:      "vi",
+		TargetLang:      "en",
 		Theme:           "tokyo-night",
 		Timeout:         60,
 		AutoCopy:        true,

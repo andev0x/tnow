@@ -3,6 +3,7 @@ package analysis
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/andev0x/tnow/internal/language"
@@ -10,12 +11,14 @@ import (
 )
 
 type mockProvider struct {
-	res runtime.GenerationResult
-	err error
+	res     runtime.GenerationResult
+	err     error
+	lastReq runtime.GenerationRequest
 }
 
 func (m *mockProvider) Name() string { return "mock" }
 func (m *mockProvider) Generate(ctx context.Context, req runtime.GenerationRequest) (runtime.GenerationResult, error) {
+	m.lastReq = req
 	return m.res, m.err
 }
 
@@ -64,6 +67,20 @@ func TestEngineAnalyze(t *testing.T) {
 	r, err := eng.Analyze(context.Background(), Request{Word: "awkward", TargetLang: language.VI})
 	if err != nil || r.Word != "awkward" {
 		t.Fatalf("got %v %v", r, err)
+	}
+}
+
+func TestEngineAnalyzeDefaultsToEnglish(t *testing.T) {
+	resObj := Result{Word: "awkward", Language: "en", IPA: "/x/", PartOfSpeech: "adjective", Definitions: []Definition{{Meaning: "m", Translations: []string{"v"}}}, Examples: []Example{{Source: "s", Translation: "t"}}}
+	b, _ := json.Marshal(resObj)
+	mp := &mockProvider{res: runtime.GenerationResult{Text: string(b)}}
+	rt := runtime.New(map[string]runtime.Provider{"mock": mp}, "mock")
+	eng := NewEngine(rt, "mock", "m")
+	if _, err := eng.Analyze(context.Background(), Request{Word: "awkward"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(mp.lastReq.SystemPrompt, "English") {
+		t.Fatalf("default target prompt = %q, want English", mp.lastReq.SystemPrompt)
 	}
 }
 

@@ -67,6 +67,19 @@ cd tnow
 go build -o tnow ./cmd/tnow
 ```
 
+### Homebrew
+
+```bash
+brew tap andev0x/tap
+brew install tnow
+```
+
+Or in one command:
+
+```bash
+brew install andev0x/tap/tnow
+```
+
 ### Auto install (curl)
 
 ```bash

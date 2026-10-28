@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Homebrew installation via `brew tap andev0x/tap`.
 - Professional documentation set under `docs/`: getting started, CLI reference, TUI guide, configuration, languages, and architecture.
 - MIT license.
 - Contribution guide, code of conduct, security policy, issue templates, and pull request template.

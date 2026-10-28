@@ -33,6 +33,13 @@ go build -o tnow ./cmd/tnow
 ./tnow --help
 ```
 
+Or install with Homebrew:
+
+```bash
+brew tap andev0x/tap
+brew install tnow
+```
+
 ## Use a local model (Ollama)
 
 Start Ollama and pull a multilingual model:

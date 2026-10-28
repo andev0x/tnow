@@ -13,7 +13,7 @@ jobs:
     name: Release
     # Only stable tags such as v0.0.1 are released.
     # Pre-release tags such as v0.0.1-beta are intentionally skipped.
-    if: github.ref_type == 'tag' && github.ref_name =~ '^v[0-9]+\.[0-9]+\.[0-9]+$'
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v') && !contains(github.ref_name, '-')
     runs-on: ubuntu-latest
 
     steps:

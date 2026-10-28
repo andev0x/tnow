@@ -53,6 +53,7 @@ var slashCommands = []slashCommand{
 	{Name: "/to", Aliases: []string{"/lang", "/language", "/target"}, Usage: "/to <language|country>", Description: "set target language"},
 	{Name: "/models", Aliases: []string{"/model", "/provider", "/providers"}, Usage: "/models [query]", Description: "browse providers & models"},
 	{Name: "/word", Aliases: []string{"/analyze", "/mode"}, Usage: "/word [text]", Description: "toggle word analysis mode"},
+	{Name: "/theme", Aliases: []string{"/colors", "/colour"}, Usage: "/theme [name]", Description: "set color theme"},
 	{Name: "/quit", Aliases: []string{"/exit", "/q"}, Usage: "/quit", Description: "exit application"},
 	{Name: "/help", Aliases: []string{"/?"}, Usage: "/help", Description: "show available commands"},
 }
@@ -260,9 +261,17 @@ type Model struct {
 	// unified models browser (/models)
 	showModelsBrowser bool
 	mbFocus           string // "provider" | "model"
-	mbProviderIdx     int
-	mbModelIdx        int
-	mbSearchInput     textinput.Model
+
+	// theme browser
+	showThemeBrowser bool
+	themeBrowserIdx  int
+	themeBrowserX    int
+	themeBrowserY    int
+	themeBrowserW    int
+	themeBrowserH    int
+	mbProviderIdx    int
+	mbModelIdx       int
+	mbSearchInput    textinput.Model
 
 	// result viewport scroll and panel focus
 	resultScroll int
@@ -272,7 +281,8 @@ type Model struct {
 }
 
 func NewModel(a *app.App) Model {
-	styles := DefaultStyles()
+	ApplyConfigTheme(a.Config)
+	styles := StylesForConfig(a.Config)
 
 	ta := textarea.New()
 	ta.Placeholder = "Type or paste text…"
@@ -349,7 +359,7 @@ func NewModel(a *app.App) Model {
 		}
 	}
 
-	return Model{
+	m := Model{
 		app:             a,
 		mode:            ModeQuick,
 		input:           ta,
@@ -366,6 +376,60 @@ func NewModel(a *app.App) Model {
 		filterExcellent: false,
 		mbFocus:         "provider",
 	}
+	m.applyWidgetStyles()
+	return m
+}
+
+// applyWidgetStyles repaints the embedded widgets after a theme change. Widgets
+// capture their lipgloss styles when they are created, so updating the model
+// palette alone would leave the input editor on the previous background.
+func (m *Model) applyWidgetStyles() {
+	panelBG := lipgloss.NewStyle().Background(lipgloss.Color(ColorBgPanel))
+	panelText := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ColorTextPrimary)).
+		Background(lipgloss.Color(ColorBgPanel))
+	panelMuted := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ColorTextMuted)).
+		Background(lipgloss.Color(ColorBgPanel))
+
+	m.input.FocusedStyle.Base = panelBG
+	m.input.FocusedStyle.CursorLine = panelBG
+	m.input.FocusedStyle.EndOfBuffer = panelBG
+	m.input.FocusedStyle.LineNumber = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ColorTextDim)).
+		Background(lipgloss.Color(ColorBgPanel))
+	m.input.FocusedStyle.CursorLineNumber = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ColorBorderFocused)).
+		Background(lipgloss.Color(ColorBgPanel))
+	m.input.FocusedStyle.Placeholder = panelMuted
+	m.input.FocusedStyle.Text = panelText
+	m.input.BlurredStyle.Base = panelBG
+	m.input.BlurredStyle.CursorLine = panelBG
+	m.input.BlurredStyle.EndOfBuffer = panelBG
+	m.input.BlurredStyle.Placeholder = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ColorTextDim)).
+		Background(lipgloss.Color(ColorBgPanel))
+	m.input.BlurredStyle.Text = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ColorTextSecondary)).
+		Background(lipgloss.Color(ColorBgPanel))
+
+	m.modelInput.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorPrimary)).Bold(true)
+	m.modelInput.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextPrimary))
+	m.modelInput.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextMuted))
+
+	m.highlightInput.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorHighlightFg)).Bold(true)
+	m.highlightInput.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorHighlightFg)).Bold(true)
+	m.highlightInput.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextMuted))
+
+	m.apiKeyInput.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorWarning)).Bold(true)
+	m.apiKeyInput.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextPrimary))
+	m.apiKeyInput.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextMuted))
+
+	m.mbSearchInput.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorPrimary)).Bold(true)
+	m.mbSearchInput.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextPrimary))
+	m.mbSearchInput.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextMuted))
+
+	m.spinner.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorWarning))
 }
 
 func (m Model) Init() tea.Cmd {
@@ -642,6 +706,82 @@ func (m Model) modelIndexForProvider(provider string) int {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.showThemeBrowser {
+		switch msg := msg.(type) {
+		case tea.WindowSizeMsg:
+			m.width = msg.Width
+			m.height = msg.Height
+			m = m.syncInputSize()
+			m = m.syncThemeBrowserGeometry()
+			return m, nil
+		case tea.MouseMsg:
+			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+				geom := m.syncThemeBrowserGeometry()
+				themes := ThemeNames()
+				relY := msg.Y - geom.themeBrowserY - 1
+				itemIndex := relY - 2
+				if itemIndex >= 0 && itemIndex < len(themes) {
+					if msg.X >= geom.themeBrowserX && msg.X < geom.themeBrowserX+geom.themeBrowserW {
+						m.themeBrowserIdx = itemIndex
+						name := themes[itemIndex]
+						m.app.SetTheme(name)
+						ApplyConfigTheme(m.app.Config)
+						m.styles = StylesForConfig(m.app.Config)
+						m.applyWidgetStyles()
+						m.showThemeBrowser = false
+						m.status = "theme set to " + name
+						m.input.Focus()
+						return m, nil
+					}
+				}
+			}
+			return m, nil
+		case tea.KeyMsg:
+			themes := ThemeNames()
+			switch msg.String() {
+			case "esc", "ctrl+c":
+				m.showThemeBrowser = false
+				m.input.Focus()
+				return m, nil
+			case "ctrl+d":
+				if m.cancel != nil {
+					m.cancel()
+				}
+				return m, tea.Quit
+			case "up", "ctrl+p":
+				if len(themes) > 0 {
+					m.themeBrowserIdx--
+					if m.themeBrowserIdx < 0 {
+						m.themeBrowserIdx = len(themes) - 1
+					}
+				}
+				return m, nil
+			case "down", "ctrl+n":
+				if len(themes) > 0 {
+					m.themeBrowserIdx++
+					if m.themeBrowserIdx >= len(themes) {
+						m.themeBrowserIdx = 0
+					}
+				}
+				return m, nil
+			case "enter":
+				if len(themes) > 0 && m.themeBrowserIdx >= 0 && m.themeBrowserIdx < len(themes) {
+					name := themes[m.themeBrowserIdx]
+					m.app.SetTheme(name)
+					ApplyConfigTheme(m.app.Config)
+					m.styles = StylesForConfig(m.app.Config)
+					m.applyWidgetStyles()
+					m.showThemeBrowser = false
+					m.status = "theme set to " + name
+					m.input.Focus()
+				}
+				return m, nil
+			}
+			return m, nil
+		}
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -1437,6 +1577,68 @@ func (m *Model) openModelsBrowser() tea.Cmd {
 	return nil
 }
 
+func (m *Model) openThemeBrowser() Model {
+	themes := ThemeNames()
+	idx := 0
+	for i, name := range themes {
+		if name == m.app.Config.Theme {
+			idx = i
+			break
+		}
+	}
+	m.showThemeBrowser = true
+	m.themeBrowserIdx = idx
+	m.input.Blur()
+	m.status = "↑↓ navigate · Enter apply · click to select · Esc close"
+	// store geometry based on current size
+	*m = m.syncThemeBrowserGeometry()
+	return *m
+}
+
+func (m *Model) syncThemeBrowserGeometry() Model {
+	box := m.themeBrowserBox()
+	bw, bh := lipgloss.Size(box)
+	width := m.width
+	if width == 0 {
+		width = 80
+	}
+	height := m.effectiveHeight()
+	m.themeBrowserW = bw
+	m.themeBrowserH = bh
+	m.themeBrowserX = max(0, (width-bw)/2)
+	m.themeBrowserY = max(0, (height-bh)/2)
+	return *m
+}
+
+func (m Model) themeBrowserBox() string {
+	themes := ThemeNames()
+	current := m.app.Config.Theme
+	var b strings.Builder
+	b.WriteString("Select Theme")
+	b.WriteByte('\n')
+	b.WriteByte('\n')
+	for i, name := range themes {
+		prefix := "  "
+		if i == m.themeBrowserIdx {
+			prefix = "> "
+		}
+		line := prefix + name
+		if name == current {
+			line += " (active)"
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	b.WriteByte('\n')
+	b.WriteString("Enter apply · Esc close · click to select")
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(ColorBorderFocused)).
+		Background(lipgloss.Color(ColorBgRaised)).
+		Padding(0, 1)
+	return style.Render(strings.TrimRight(b.String(), "\n"))
+}
+
 func (m Model) modelsForProvider(name string) []string {
 	seen := make(map[string]bool)
 	var models []string
@@ -1586,6 +1788,30 @@ func (m Model) handleSlashCommand(raw string) (tea.Model, tea.Cmd) {
 		m.result = ""
 		m.analysisResult = nil
 
+	case "/theme", "/colors", "/colour":
+		if len(args) == 0 {
+			restoreRetained()
+			return m.openThemeBrowser(), nil
+		}
+		name := strings.Join(args, " ")
+		theme, ok := ThemeByName(name)
+		if !ok {
+			name = strings.Join(args, "-")
+			theme, ok = ThemeByName(name)
+		}
+		if !ok {
+			m.status = "unknown theme: " + strings.Join(args, " ")
+			restoreRetained()
+			return m, nil
+		}
+		m.app.Config.Theme = theme.Name
+		_ = config.Save(m.app.Config)
+		ApplyConfigTheme(m.app.Config)
+		m.styles = StylesForConfig(m.app.Config)
+		m.applyWidgetStyles()
+		m.status = "theme set to " + theme.Name
+		restoreRetained()
+
 	case "/quit", "/exit", "/q":
 		return m, tea.Quit
 
@@ -1677,6 +1903,11 @@ func (m Model) View() string {
 	}
 	if m.showModelsBrowser {
 		return m.renderModelsBrowser()
+	}
+	if m.showThemeBrowser {
+		m = m.syncThemeBrowserGeometry()
+		box := m.themeBrowserBox()
+		return m.centeredOverlay(box, ColorBgRaised)
 	}
 
 	inputHeight, resultHeight := m.layoutSizes()
@@ -2194,7 +2425,7 @@ func (m Model) footerStatus() (string, lipgloss.Style, bool) {
 		noticePrefixes := []string{
 			"target language set to ", "model set to ", "provider set to ", "word analysis mode",
 			"quick translation mode", "filtering", "showing all", "auto-copied",
-			"key saved for ",
+			"key saved for ", "theme set to ",
 		}
 		for _, prefix := range noticePrefixes {
 			if strings.HasPrefix(statusText, prefix) {

@@ -21,11 +21,16 @@ type ProviderConfig struct {
 }
 
 type Config struct {
-	DefaultProvider string           `yaml:"default_provider" json:"default_provider"`
-	DefaultModel    string           `yaml:"default_model" json:"default_model"`
-	SourceLang      string           `yaml:"source_lang" json:"source_lang"`
-	TargetLang      string           `yaml:"target_lang" json:"target_lang"`
-	Providers       []ProviderConfig `yaml:"providers" json:"providers"`
+	DefaultProvider string            `yaml:"default_provider" json:"default_provider"`
+	DefaultModel    string            `yaml:"default_model" json:"default_model"`
+	SourceLang      string            `yaml:"source_lang" json:"source_lang"`
+	TargetLang      string            `yaml:"target_lang" json:"target_lang"`
+	Theme           string            `yaml:"theme" json:"theme"`
+	ColorTheme      string            `yaml:"color_theme" json:"color_theme"`
+	ThemeName       string            `yaml:"theme_name" json:"theme_name"`
+	ColorScheme     string            `yaml:"color_scheme" json:"color_scheme"`
+	Colors          map[string]string `yaml:"colors" json:"colors"`
+	Providers       []ProviderConfig  `yaml:"providers" json:"providers"`
 	// runtime
 	Timeout int `yaml:"timeout" json:"timeout"`
 	// auto copy translation output to clipboard when done
@@ -38,6 +43,7 @@ func Default() Config {
 		DefaultModel:    "",
 		SourceLang:      "auto",
 		TargetLang:      "vi",
+		Theme:           "tokyo-night",
 		Timeout:         60,
 		AutoCopy:        true,
 		Providers: []ProviderConfig{
@@ -113,6 +119,9 @@ func Load() (Config, error) {
 				if cfg.DefaultProvider == "" {
 					cfg.DefaultProvider = "ollama"
 				}
+				if cfg.Theme == "" {
+					cfg.Theme = "tokyo-night"
+				}
 				if cfg.Timeout <= 0 {
 					cfg.Timeout = 60
 				}
@@ -160,6 +169,17 @@ func Load() (Config, error) {
 				if jcfg.DefaultModel != "" {
 					merged.DefaultModel = jcfg.DefaultModel
 				}
+				if jcfg.Theme != "" {
+					merged.Theme = jcfg.Theme
+				}
+				if len(jcfg.Colors) > 0 {
+					if merged.Colors == nil {
+						merged.Colors = map[string]string{}
+					}
+					for k, v := range jcfg.Colors {
+						merged.Colors[k] = v
+					}
+				}
 				cfg = merged
 			}
 		}
@@ -167,6 +187,9 @@ func Load() (Config, error) {
 	// merge defaults for missing
 	if cfg.DefaultProvider == "" {
 		cfg.DefaultProvider = "ollama"
+	}
+	if cfg.Theme == "" {
+		cfg.Theme = "tokyo-night"
 	}
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 60

@@ -123,6 +123,11 @@ func (a *App) SetModel(model string) {
 	_ = config.Save(a.Config)
 }
 
+func (a *App) SetTheme(theme string) {
+	a.Config.Theme = theme
+	_ = config.Save(a.Config)
+}
+
 func (a *App) SetTarget(lang language.Language) {
 	a.TargetLang = lang
 	a.Config.TargetLang = string(lang)

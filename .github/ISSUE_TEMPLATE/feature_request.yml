@@ -1,0 +1,68 @@
+name: Feature request
+description: Suggest a focused improvement to tnow
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        `tnow` is intentionally small: no chat history, no agent loops, and one bounded operation per request. Please explain the user problem before the proposed solution.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what gets in the way?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behaviour or interface you would like.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing flags, config, shell workarounds, or other tools.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - CLI
+        - TUI
+        - Translation
+        - Word analysis
+        - Providers
+        - Languages
+        - Configuration
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Fit with the project scope
+      description: Why does this belong in a bounded terminal language runtime rather than a chat assistant?
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: This request is focused and does not require conversation history or autonomous agents.
+          required: false

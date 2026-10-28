@@ -1,0 +1,8 @@
+# Default owners for everything in this repository.
+* @andev0x
+
+# Documentation
+/docs/ @andev0x
+
+# CI and repository configuration
+/.github/ @andev0x

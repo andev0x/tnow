@@ -1,174 +1,323 @@
 # tnow
 
-`tnow` is a terminal-native language runtime, not a chatbot.
+**A terminal-native language runtime — not a chatbot.**
 
-It converts a bounded language intent into a bounded, validated LLM operation and presents the result with minimal ceremony.
+`tnow` turns a bounded language intent into a bounded, validated LLM operation and prints the result with minimal ceremony. It is designed to feel like `grep`, `curl`, or `git`: fast, quiet, scriptable, and predictable.
 
-## Why
+[![CI](https://github.com/andev0x/tnow/actions/workflows/ci.yml/badge.svg)](https://github.com/andev0x/tnow/actions/workflows/ci.yml)
+[![Go Version](https://img.shields.io/badge/Go-1.27-00ADD8?logo=go)](go.mod)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-Most LLM tools feel like chat. `tnow` feels like `grep`, `curl`, or `git`: fast, quiet, composable.
+```console
+$ tnow --to vi "The deployment failed unexpectedly."
+Việc triển khai đã thất bại ngoài dự kiến.
 
-- No chat history
-- No agent loops
-- No conversational filler
-- Deterministic contracts
-- Validated output
-
-## Install
-
-```bash
-go build ./cmd/tnow
+$ echo "Good morning" | tnow --to ja
+おはようございます
 ```
 
-Or:
+## Why tnow?
+
+Most LLM tools want to be a conversation. `tnow` wants to be a command.
+
+| Chat assistant | `tnow` |
+| --- | --- |
+| Conversation history | No history by default |
+| Agent loops and tool plans | One bounded request, one result |
+| Prose, caveats, filler | Validated output only |
+| Interactive-first | Pipes, stdin, stdout, exit codes |
+| Opaque prompts | Deterministic translation and analysis contracts |
+
+## Features
+
+- **Two focused operations** — translate text, or analyze a word with IPA, part of speech, definitions, and examples.
+- **Terminal-first CLI** — read from arguments or stdin, write the result to stdout, errors to stderr.
+- **Streaming TUI** — a stable, keyboard-driven interface with no chat log, slash commands, and a model browser.
+- **Multiple providers** — Ollama, OpenAI, Groq, Gemini, OpenRouter, and OpenAI-compatible endpoints.
+- **Language resolution** — accept codes, language names, country names, or country codes (`vi`, `vietnamese`, `vietnam`, `vn`).
+- **Validation where it counts** — completed CLI results are checked for empty responses and conversational filler; analysis output must satisfy a strict schema.
+- **Local by default** — the default provider is a local Ollama instance; no telemetry and no conversation history.
+- **Nine built-in themes** — including Tokyo Night, Catppuccin Macchiato, Dracula, Nord, Forest, Matrix, and Light.
+
+## Requirements
+
+- Go **1.27** or newer to build from source.
+- A provider:
+  - [Ollama](https://ollama.com/) running locally (default), or
+  - an API key for OpenAI, Groq, Gemini, or OpenRouter.
+- A terminal with UTF-8 support. The TUI works best in a modern terminal with true color.
+
+## Installation
+
+### `go install` (recommended)
 
 ```bash
 go install github.com/andev0x/tnow/cmd/tnow@latest
 ```
 
-## CLI usage
+Make sure `$(go env GOPATH)/bin` is on your `PATH`.
+
+### Build from source
+
+```bash
+git clone https://github.com/andev0x/tnow.git
+cd tnow
+go build -o tnow ./cmd/tnow
+```
+
+### Verify
+
+```bash
+tnow --help
+```
+
+## Quick start
+
+### 1. Start a local model
+
+```bash
+ollama serve
+ollama pull llama3.2
+```
+
+### 2. Translate something
 
 ```bash
 tnow "Hello world"
 tnow --to vi "The deployment failed unexpectedly."
-echo "Good morning" | tnow --to vi
-tnow --from en --to vi "text"
-tnow --to vietnam "text"
-tnow --word awkward
-tnow --model llama3.2:3b "text"
-tnow --provider ollama "text"
+tnow --from en --to ja "Ship it."
 ```
 
-Output goes to stdout; errors go to stderr.
+If no target is given, the configured default is used (`vi` on a fresh install).
 
-## TUI
+### 3. Pipe text
 
-Run with no input:
+```bash
+echo "Good morning" | tnow --to vi
+cat notes.txt | tnow --to fr
+```
+
+### 4. Analyze a word
+
+```bash
+tnow --word awkward
+tnow --word --to vi serendipity
+```
+
+### 5. Open the TUI
 
 ```bash
 tnow
 ```
 
-Type any text and press `Alt+Enter` to translate. No chat — just a bounded operation.
+Type, then press `Alt+Enter` (or `Ctrl+S`) to translate. Use `Tab` to switch between **Quick** translation and **Analyze** mode.
 
-### Keys
+## Usage
 
-| Key | Action |
-|-----|--------|
-| `Enter` | newline inside input; accepts the highlighted suggestion when the menu is open |
-| `Alt+Enter` | submit (also `Ctrl+Enter` / `Ctrl+S` / `Ctrl+J` for compatibility) |
-| `Tab` | switch mode (Quick ↔ Analyze); accepts a suggestion when the menu is open |
-| `Ctrl+Y` | copy result to clipboard |
-| `Ctrl+L` | cycle target language |
-| `Ctrl+M` / `Alt+M` | set model (modal) |
-| `Ctrl+H` | highlight word/section (Esc to clear) |
-| `Ctrl+E` | add or replace the active provider's API key |
-| `Esc` | dismiss the command palette or overlay / cancel request / clear highlight |
-| `Ctrl+C` | clear the input and result |
-| `Ctrl+D` | quit |
-| `↑` / `↓` / `Ctrl+P` / `Ctrl+N` | navigate suggestions |
-| `Tab` / `Enter` | accept the highlighted suggestion |
+### CLI
 
-### Autocomplete
-
-The input card has a fixed height. Long drafts wrap and scroll inside it, and an
-empty card shows a placeholder instead of changing size. Typing `/` opens a
-floating command palette over the output area; it has a fixed size derived only
-from the terminal, so opening, filtering, or closing it never resizes or moves
-the input or translation panels. The palette also works when the slash command
-is on the last line of a longer translation draft:
-
-- `/` → all slash commands
-- `/m` → matches `/models`
-- `/to <language|country>` → set the target language; accepts codes (`vi`), language names (`vietnamese`), country names (`vietnam`, `south korea`), and country codes (`vn`, `kr`). Typing `/to ` opens the language picker and matches all of these forms.
-- `/models [query]` → open the provider/model browser (aliases `/model`, `/provider`, `/providers`)
-- `/word [text]` → toggle word analysis mode (Tab also toggles)
-- `/quit` → exit (aliases `/exit`, `/q`)
-- `/help` → show help
-
-Navigation is keyboard-only: `↑↓` to move, `Tab`/`Enter` to accept, `Esc` to
-dismiss the palette while keeping any draft above the slash line. Enter applies
-a resolved target immediately; ambiguous input keeps the picker open so you can
-choose. Source language remains `auto` by default and is detected from the
-submitted text.
-
-The interface uses opaque layered surfaces (terminal background, panel, raised
-palette), top-left IDE-style panel titles, and a focus accent that follows the
-active input or output panel. All card heights come from the terminal size only,
-so the layout stays stable in split panes and short windows; long text scrolls
-inside the editor and result panel, and the footer shows only shortcuts relevant
-to the current state.
-
-### Models & Providers
-
-```bash
-/models          # browse providers and models
-/models gpt-4o   # pre-filter the model list
-/provider openai # open with the OpenAI provider selected
+```text
+tnow [flags] [text]
 ```
 
-The browser keeps providers on the left and the selected provider's models on
-the right. The active model is pinned first, followed by models that are strong
-at multilingual translation. The model details are intentionally compact:
-usage context plus the useful capabilities (`Vision`, `Tools`). The dialog has
-a fixed size; long provider/model lists scroll and end with an overflow marker
-such as `… 12 more` instead of making the box grow or jump.
+| Flag | Short | Description |
+| --- | --- | --- |
+| `--from` | `-f` | Source language (default: `auto`) |
+| `--to` | `-t` | Target language |
+| `--word` | `-w` | Analyze a word or short phrase |
+| `--model` | `-m` | Set the model (persisted as the default) |
+| `--provider` | `-p` | Set the provider (persisted as the default) |
 
-* **Translation-optimized filtering** — models are sorted with multilingual-translation excellence first (`✦` badge for `gpt-4o`, `claude`, `gemini`, `qwen`, `nllb`, `aya`, `mistral`, `llama3`, `command-r`, etc.). Press `Ctrl+T` in the browser to toggle *only excellent* vs *all*.
-* **Secure provider setup** — select a provider on the left and press `Ctrl+E`. The masked prompt accepts the key and saves it with `0600` permissions to `~/.tnow/config.json` (and the YAML config mirror), then re-initializes the provider and returns to the same browser context. Pressing `Enter` on a model that needs a key also opens the prompt directly.
+Flags may appear before or after the text. If no text argument is provided and stdin is not a terminal, `tnow` reads stdin. With no text and no piped input, it launches the TUI.
+
+```bash
+tnow "text"
+tnow --to vietnam "text"          # country name resolves to Vietnamese
+tnow -to=vi -m llama3.2:3b "text"
+git log -1 --pretty=%B | tnow --to en
+```
+
+Translation output is written alone to stdout, making it safe to compose:
+
+```bash
+tnow --to en "$(cat message.txt)" > message.en.txt
+```
+
+### TUI
+
+The TUI is a two-pane workspace: input on the left, result on the right. It is intentionally not a chat interface — there is no conversation history and no agent loop.
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Newline in the input; accepts a highlighted suggestion |
+| `Alt+Enter` / `Ctrl+S` / `Ctrl+J` / `Ctrl+Enter` | Submit |
+| `Tab` | Toggle Quick ↔ Analyze; accept a suggestion when a menu is open |
+| `Ctrl+Y` | Copy the result to the clipboard |
+| `Ctrl+L` | Cycle eight common target languages |
+| `Ctrl+M` / `Alt+M` | Set the model |
+| `Ctrl+H` | Highlight a word or section in the result |
+| `Ctrl+E` | Add or replace the active provider's API key |
+| `Esc` | Close a menu/overlay, cancel a request, or clear a highlight |
+| `Ctrl+C` | Clear input and result (cancels an in-flight request) |
+| `Ctrl+D` | Quit |
+| `↑` / `↓` / `Ctrl+P` / `Ctrl+N` | Navigate suggestions |
+| `PgUp` / `PgDn` | Scroll the result |
+| `Ctrl+U` / `Alt+↑`, `Ctrl+↓` / `Alt+↓` | Scroll the result one line |
+
+Slash commands open a floating palette over the result pane:
+
+| Command | Aliases | Description |
+| --- | --- | --- |
+| `/to <language\|country>` | `/lang`, `/language`, `/target` | Set the target language |
+| `/models [query]` | `/model`, `/provider`, `/providers` | Browse providers and models |
+| `/word [text]` | `/analyze`, `/mode` | Toggle word analysis mode |
+| `/theme [name]` | `/colors`, `/colour` | Choose a color theme |
+| `/help` | `/?` | Show available commands |
+| `/quit` | `/exit`, `/q` | Exit |
+
+Inside the model browser, `Ctrl+T` toggles between translation-optimized models and all models. `Ctrl+E` saves an API key for the selected provider.
+
+See the [TUI guide](docs/tui.md) for layout, themes, and the full key reference.
 
 ## Providers
 
-Supported:
+| Provider | `name` | Default endpoint | API key |
+| --- | --- | --- | --- |
+| Ollama | `ollama` | `http://localhost:11434` | Not required |
+| OpenAI | `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
+| Groq | `groq` | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` |
+| Gemini | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | `GEMINI_API_KEY` |
+| OpenRouter | `openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
+| OpenAI-compatible | `openai-compatible` | Configured `base_url` | Optional |
 
-- Ollama
-- OpenAI-compatible APIs
-- Groq
-- Gemini
-- OpenRouter
+Configure providers in `~/.config/tnow/config.yaml` (or the platform equivalent), through environment variables, or interactively with `Ctrl+E` in the TUI. See [Configuration](docs/configuration.md).
 
-Configure via `~/.config/tnow/config.yaml` (mirrored to `~/.tnow/config.json`, where `Ctrl+E` key updates are written) or environment variables:
+```bash
+OPENAI_API_KEY=sk-... tnow --provider openai --model gpt-4o-mini "Hello"
+OLLAMA_HOST=http://127.0.0.1:11434 tnow --model qwen2.5 "Hello"
+```
 
-- `OLLAMA_HOST`
-- `OPENAI_API_KEY`
-- `GROQ_API_KEY`
-- `GEMINI_API_KEY`
-- `OPENROUTER_API_KEY`
+## Configuration at a glance
 
-## Privacy
+Configuration is loaded from the platform config directory:
 
-No persistent conversation history by default. Secrets are never printed or logged.
+```text
+macOS    ~/Library/Application Support/tnow/config.yaml
+Linux    ~/.config/tnow/config.yaml
+Windows  %AppData%\tnow\config.yaml
+```
+
+A JSON mirror is written to `~/.tnow/config.json` for compatibility with the TUI's key management. Both files are created with private permissions (`0600`).
+
+```yaml
+default_provider: ollama
+default_model: llama3.2
+source_lang: auto
+target_lang: vi
+
+theme: tokyo-night
+timeout: 60
+auto_copy: true
+
+providers:
+  - name: ollama
+    base_url: http://localhost:11434
+    model: llama3.2
+  - name: openai
+    api_key: sk-...
+    model: gpt-4o-mini
+```
+
+Environment variables override configuration values (API keys only fill providers that have no stored key):
+
+| Variable | Purpose |
+| --- | --- |
+| `OLLAMA_HOST` | Ollama base URL |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `GROQ_API_KEY` | Groq API key |
+| `GEMINI_API_KEY` | Gemini API key |
+| `OPENROUTER_API_KEY` | OpenRouter API key |
+| `TNOW_CONFIG` | Override the YAML config path |
+| `TNOW_JSON_CONFIG` | Override the JSON config path |
+
+Full schema and precedence rules: [docs/configuration.md](docs/configuration.md).
+
+## Documentation
+
+| Document | Contents |
+| --- | --- |
+| [Getting started](docs/getting-started.md) | Install, configure a provider, first translation |
+| [CLI reference](docs/cli.md) | Flags, stdin, output, exit codes |
+| [TUI guide](docs/tui.md) | Modes, keys, slash commands, themes |
+| [Configuration](docs/configuration.md) | Files, schema, environment, providers |
+| [Architecture](docs/architecture.md) | Layers, packages, request lifecycle, extension points |
+| [Languages](docs/languages.md) | Supported languages and resolution rules |
+| [Contributing](CONTRIBUTING.md) | Development setup, tests, pull requests |
+| [Security](SECURITY.md) | Reporting vulnerabilities and secret handling |
+| [Changelog](CHANGELOG.md) | Release history |
 
 ## Architecture
 
+```text
+CLI / TUI / stdin
+        │
+        ▼
+   Application
+   (app, config, language)
+        │
+        ▼
+  Language engines
+  (translation, analysis)
+        │
+        ▼
+     Runtime
+  (bounded generation)
+        │
+        ▼
+    Providers
+ (Ollama / OpenAI-compatible)
+        │
+        ▼
+      LLM
 ```
-CLI/TUI/stdin -> Application/Language Engine -> Runtime -> Provider -> LLM
-```
+
+Every request follows the same contract: a bounded intent, a deterministic system prompt, a single provider call, and validation of completed results. There are no agent loops or hidden follow-up requests.
+
+Read [docs/architecture.md](docs/architecture.md) for the package map and extension points.
 
 ## Development
 
 ```bash
-gofmt -w .
-go vet ./...
-go test ./...
-go test -race ./...
-go build ./...
-make lint        # golangci-lint run ./... (uses .golangci.yml, v2, go 1.27)
-make lint-fix    # auto-fix where possible
+make build       # go build ./...
+make test        # go test ./...
+make race        # go test -race ./...
+make vet         # go vet ./...
+make fmt         # gofmt -w .
+make lint        # golangci-lint run ./...
+make lint-fix    # golangci-lint run --fix ./...
+make install     # go install ./cmd/tnow
 ```
 
-Lint is enforced via **golangci-lint v2** (`.golangci.yml`):
+Linting is enforced with **golangci-lint v2** using [`.golangci.yml`](.golangci.yml). CI runs formatting checks, `go vet`, the race-enabled test suite, a build, and linting.
 
-- `standard` linters (`govet`, `staticcheck`, `errcheck`, `ineffassign`, `unused`) plus minimal `go vet` checks
-- `gofmt` + `goimports` formatters (local prefix `github.com/andev0x/tnow`)
-- Tests excluded from `errcheck`/`dupl` noise
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
-Install:
+## Privacy
 
-```bash
-# via Go (pinned version matching CI)
-go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-# or via brew
-brew install golangci-lint
-golangci-lint --version # >= 2.15.0
-```
+- No conversation history is stored by default.
+- Prompts are sent only to the provider you configure.
+- API keys are stored in config files with `0600` permissions and are never printed or logged.
+- Automatic clipboard copy is enabled by default and can be disabled with `auto_copy: false`.
+
+## License
+
+Released under the [MIT License](LICENSE).
+
+Copyright (c) 2026 andev0x.
+
+## Author
+
+**andev0x** — [github.com/andev0x](https://github.com/andev0x)
+
+If `tnow` is useful to you, consider starring the repository or opening an issue with feedback.

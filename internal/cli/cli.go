@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -40,6 +41,9 @@ func Run(a *app.App, args []string, stdin io.Reader, stdout, stderr io.Writer) i
 	// Reorder so flags can appear after positional text.
 	args = reorderArgs(args)
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 

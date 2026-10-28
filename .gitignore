@@ -1,9 +1,28 @@
 # ohgo runtime state
 .ohgo/
 
+# local code-graph / tooling state
+.lynx/
+
+# build artifacts
+/tnow
+/dist/
+
+# test and coverage output
+coverage.out
+*.test
+
+# local environment
+.env
+.env.*
+!.env.example
+
 # macOS
 .DS_Store
 
 # bug screenshots
 imgbugs/
 img-bugs/
+
+# Keep the project changelog tracked even if a global Git ignore excludes it.
+!CHANGELOG.md

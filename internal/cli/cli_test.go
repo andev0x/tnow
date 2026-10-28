@@ -86,6 +86,18 @@ func TestCLINoInputReturnsMinus1(t *testing.T) {
 	}
 }
 
+func TestCLIHelpExitsZero(t *testing.T) {
+	a := newTestApp(runtime.GenerationResult{}, nil)
+	var out, errb bytes.Buffer
+	code := Run(a, []string{"--help"}, nil, &out, &errb)
+	if code != 0 {
+		t.Fatalf("code %d", code)
+	}
+	if !strings.Contains(errb.String(), "Usage of tnow") {
+		t.Fatalf("stderr=%q", errb.String())
+	}
+}
+
 func TestCLICountryNameLanguage(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TNOW_CONFIG", filepath.Join(dir, "config.yaml"))

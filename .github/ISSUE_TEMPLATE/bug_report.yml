@@ -1,0 +1,107 @@
+name: Bug report
+description: Report a reproducible problem with tnow
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please remove API keys and private text from logs before submitting.
+
+        For security vulnerabilities, do **not** open an issue — see [SECURITY.md](https://github.com/andev0x/tnow/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include the exact command or TUI steps.
+      placeholder: |
+        1. Run `tnow --to vi "Hello"`
+        2. ...
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include the full error output with secrets removed.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: tnow version or commit
+      description: Release tag, commit SHA, or `main` as of a date.
+      placeholder: v0.1.0 / 9f4f115
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      options:
+        - Ollama
+        - OpenAI
+        - Groq
+        - Gemini
+        - OpenRouter
+        - OpenAI-compatible
+        - Other / not applicable
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: llama3.2 / gpt-4o-mini / ...
+    validations:
+      required: false
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, architecture, terminal, and Go version.
+      placeholder: macOS 15 arm64, iTerm2, Go 1.27.2
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Screenshots, terminal recordings, config snippets (with keys removed), or anything else useful.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I removed API keys, tokens, and private text from this report.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

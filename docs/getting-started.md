@@ -10,7 +10,7 @@ This guide takes you from zero to a working translation using a local model, the
   - a local [Ollama](https://ollama.com/) installation, or
   - an API key for OpenAI, Groq, Gemini, or OpenRouter.
 
-The default configuration uses Ollama at `http://localhost:11434` with the `llama3.2` model. If you prefer a hosted provider, skip to [Use a hosted provider](#use-a-hosted-provider).
+The default configuration uses Ollama at `http://localhost:11434` with the `translategemma:4b` model. If you prefer a hosted provider, skip to [Use a hosted provider](#use-a-hosted-provider).
 
 ## Install
 
@@ -39,7 +39,7 @@ Start Ollama and pull a multilingual model:
 
 ```bash
 ollama serve
-ollama pull llama3.2
+ollama pull translategemma:4b
 ```
 
 Translate text:

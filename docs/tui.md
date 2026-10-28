@@ -18,7 +18,7 @@ tnow --word
 
 ```text
 ┌ tnow ─────────────────────────────────────────────────────────────┐
-│ QUICK · AUTO → VIETNAMESE                            ollama/llama3.2 │
+│ QUICK · AUTO → VIETNAMESE                            ollama/translategemma:4b │
 ├───────────────────────────────┬───────────────────────────────────┤
 │ Input                         │ Result                            │
 │                               │                                   │

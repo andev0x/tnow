@@ -40,14 +40,14 @@ type Config struct {
 func Default() Config {
 	return Config{
 		DefaultProvider: "ollama",
-		DefaultModel:    "",
+		DefaultModel:    "translategemma:4b",
 		SourceLang:      "auto",
 		TargetLang:      "vi",
 		Theme:           "tokyo-night",
 		Timeout:         60,
 		AutoCopy:        true,
 		Providers: []ProviderConfig{
-			{Name: "ollama", BaseURL: "http://localhost:11434", Model: "llama3.2"},
+			{Name: "ollama", BaseURL: "http://localhost:11434", Model: "translategemma:4b"},
 		},
 	}
 }

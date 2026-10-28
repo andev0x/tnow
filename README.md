@@ -8,10 +8,11 @@
 [![Go Version](https://img.shields.io/badge/Go-1.27-00ADD8?logo=go)](go.mod)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![Download](https://img.shields.io/github/v/release/andev0x/tnow?label=download&logo=github)](https://github.com/andev0x/tnow/releases/latest)
 
 ```console
-$ tnow --to vi "The deployment failed unexpectedly."
-Việc triển khai đã thất bại ngoài dự kiến.
+$ tnow --to fr "The deployment failed unexpectedly."
+> Le déploiement a échoué de manière inattendue.
 
 $ echo "Good morning" | tnow --to ja
 おはようございます
@@ -66,6 +67,14 @@ cd tnow
 go build -o tnow ./cmd/tnow
 ```
 
+### Auto install (curl)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/andev0x/tnow/main/install.sh | sh
+```
+
+[![Download](https://img.shields.io/badge/download-latest-blue?logo=github)](https://github.com/andev0x/tnow/releases/latest)
+
 ### Verify
 
 ```bash
@@ -78,7 +87,7 @@ tnow --help
 
 ```bash
 ollama serve
-ollama pull llama3.2
+ollama pull translategemma:4b
 ```
 
 ### 2. Translate something
@@ -212,7 +221,7 @@ A JSON mirror is written to `~/.tnow/config.json` for compatibility with the TUI
 
 ```yaml
 default_provider: ollama
-default_model: llama3.2
+default_model: translategemma:4b
 source_lang: auto
 target_lang: vi
 
@@ -223,7 +232,7 @@ auto_copy: true
 providers:
   - name: ollama
     base_url: http://localhost:11434
-    model: llama3.2
+    model: translategemma:4b
   - name: openai
     api_key: sk-...
     model: gpt-4o-mini

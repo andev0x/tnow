@@ -32,7 +32,7 @@ A fresh install behaves as if this configuration were present:
 
 ```yaml
 default_provider: ollama
-default_model: ""
+default_model: translategemma:4b
 source_lang: auto
 target_lang: vi
 
@@ -43,7 +43,7 @@ auto_copy: true
 providers:
   - name: ollama
     base_url: http://localhost:11434
-    model: llama3.2
+    model: translategemma:4b
 ```
 
 If `default_model` is empty, the model configured for the active provider is used.
@@ -55,7 +55,7 @@ If `default_model` is empty, the model configured for the active provider is use
 default_provider: ollama
 
 # Model used when --model is not given. Falls back to the provider's model.
-default_model: llama3.2
+default_model: translategemma:4b
 
 # Source language. "auto" enables heuristic detection.
 source_lang: auto
@@ -86,7 +86,7 @@ providers:
   - name: ollama
     base_url: http://localhost:11434
     api_key: ""
-    model: llama3.2
+    model: translategemma:4b
     org: ""
     project: ""
     timeout: 0          # 0 = use the top-level timeout
@@ -156,16 +156,16 @@ The following provider names are recognized by the provider factory:
 
 ```yaml
 default_provider: ollama
-default_model: llama3.2
+default_model: translategemma:4b
 providers:
   - name: ollama
     base_url: http://localhost:11434
-    model: llama3.2
+    model: translategemma:4b
 ```
 
 ```bash
 ollama serve
-ollama pull llama3.2
+ollama pull translategemma:4b
 OLLAMA_HOST=http://192.168.1.10:11434 tnow "Hello"
 ```
 

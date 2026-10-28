@@ -303,7 +303,7 @@ func IsTranslationExcellent(model string) bool {
 	markers := []string{
 		"gpt-4o", "gpt-4", "claude", "gemini", "qwen", "nllb", "aya",
 		"mistral", "command-r", "llama3", "llama-3", "seamless", "opus-mt",
-		"m2m", "nmt", "deepl", "phi-3", "cohere",
+		"m2m", "nmt", "deepl", "phi-3", "cohere", "gemma", "translategemma",
 	}
 	for _, mk := range markers {
 		if strings.Contains(m, mk) {

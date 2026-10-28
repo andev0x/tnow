@@ -8,9 +8,28 @@ import (
 	"github.com/andev0x/tnow/internal/language"
 )
 
-// JSONSchema returns the strict instruction for the model.
-func JSONSchema(target language.Language) string {
+// JSONSchema returns the strict instruction for the model. Both languages are
+// named explicitly: without a source language the model can mistake a
+// Vietnamese word for Chinese and answer in the wrong language.
+func JSONSchema(source, target language.Language) string {
+	output := language.DisplayName(target)
+
+	input := "auto-detect from the input"
+	inputRules := `- Detect the input language and set "language" to its English name.
+- "ipa" must describe the input word in that language.
+- Write each "examples[].source" in that language.`
+	if source != "" && source != language.Auto {
+		input = language.DisplayName(source)
+		inputRules = fmt.Sprintf(`- The input is %s. Set "language" to %q.
+- "ipa" must describe the input word in %s.
+- Write each "examples[].source" as a natural %s sentence that uses the input.`,
+			input, input, input, input)
+	}
+
 	return fmt.Sprintf(`Analyze the given word or short phrase and return JSON only.
+
+Input language: %s
+Output language: %s
 
 Schema:
 {
@@ -28,9 +47,14 @@ Schema:
 
 Rules:
 - Return valid JSON only. No markdown fences.
-- "translations" must be in %s.
+- "language" names the input language, never the output language.
+%s
+- Write every definition "meaning", every "translations" value, and every
+  "examples[].translation" in %s.
+- Keep the input and output languages distinct. Never substitute an unrelated
+  language for the input or the output.
 - Provide 1-3 definitions and 1-3 examples.
-- Keep meanings concise.`, language.DisplayName(target))
+- Keep meanings concise.`, input, output, inputRules, output)
 }
 
 // BuildUserPrompt wraps the word.

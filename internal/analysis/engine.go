@@ -30,17 +30,18 @@ func (e *Engine) Analyze(ctx context.Context, req Request) (Result, error) {
 		src = language.Auto
 	}
 	if src == language.Auto {
+		// Leave ambiguous Latin-script input as auto so the model can identify
+		// it; a detected script or Vietnamese diacritics are reliable enough to
+		// name in the prompt (and to trust over the model's own label).
 		det, _ := language.Detect(req.Word)
-		if det != language.Auto {
+		if det != language.Auto && det != language.EN {
 			src = det
-		} else {
-			src = language.EN
 		}
 	}
 	gr := runtime.GenerationRequest{
 		Provider:     e.Provider,
 		Model:        e.Model,
-		SystemPrompt: JSONSchema(target),
+		SystemPrompt: JSONSchema(src, target),
 		UserPrompt:   BuildUserPrompt(req.Word),
 		MaxTokens:    e.MaxTokens,
 		Temperature:  e.Temperature,
@@ -58,8 +59,11 @@ func (e *Engine) Analyze(ctx context.Context, req Request) (Result, error) {
 	if parsed.Word == "" {
 		parsed.Word = req.Word
 	}
-	if parsed.Language == "" {
-		parsed.Language = string(src)
+	// The resolved source language is authoritative. Models sometimes answer
+	// with a different language label (for example Chinese for Vietnamese),
+	// which would contradict the request metadata shown in the UI.
+	if src != language.Auto {
+		parsed.Language = language.DisplayName(src)
 	}
 	if err := Validate(parsed); err != nil {
 		return Result{}, &runtime.RuntimeError{Kind: runtime.ErrValidation, Err: err}

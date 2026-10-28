@@ -29,9 +29,21 @@ const (
 	ModeAnalyze
 )
 
-type streamChunkMsg string
-type streamErrMsg struct{ err error }
-type streamDoneMsg struct{}
+type streamStartMsg struct {
+	id     int
+	chunks <-chan string
+	errs   <-chan error
+	err    error
+}
+type streamChunkMsg struct {
+	id    int
+	chunk string
+}
+type streamErrMsg struct {
+	id  int
+	err error
+}
+type streamDoneMsg struct{ id int }
 type analysisDoneMsg struct {
 	res analysis.Result
 	err error
@@ -224,9 +236,10 @@ type Model struct {
 
 	spinner spinner.Model
 
-	cancel context.CancelFunc
-	chunks <-chan string
-	errs   <-chan error
+	cancel   context.CancelFunc
+	chunks   <-chan string
+	errs     <-chan error
+	streamID int
 
 	// model overlay
 	modelInput textinput.Model
@@ -1277,18 +1290,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case streamStartMsg:
+		if !m.loading || msg.id != m.streamID {
+			return m, nil
+		}
+		if msg.err != nil {
+			if m.cancel != nil {
+				m.cancel()
+			}
+			m.loading = false
+			m.focusOutput = false
+			m.status = msg.err.Error()
+			m.cancel = nil
+			return m, nil
+		}
+		m.chunks = msg.chunks
+		m.errs = msg.errs
+		return m, waitForChunk(msg.id, msg.chunks, msg.errs)
+
 	case streamChunkMsg:
-		m.result += string(msg)
+		if !m.loading || msg.id != m.streamID {
+			return m, nil
+		}
+		m.result += msg.chunk
 		if m.status == "translating..." {
 			m.status = "streaming..."
 		}
 		if m.chunks != nil {
-			return m, waitForChunk(m.chunks, m.errs)
+			return m, waitForChunk(msg.id, m.chunks, m.errs)
 		}
 		return m, nil
 
 	case streamErrMsg:
-		if !m.loading {
+		if !m.loading || msg.id != m.streamID {
 			return m, nil
 		}
 		m.loading = false
@@ -1298,7 +1332,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case streamDoneMsg:
-		if !m.loading {
+		if !m.loading || msg.id != m.streamID {
 			return m, nil
 		}
 		m.loading = false
@@ -1309,7 +1343,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// auto copy selected output translation
 		if m.app.Config.AutoCopy && strings.TrimSpace(m.result) != "" {
 			_ = clipboard.WriteAll(strings.TrimSpace(m.result))
-			m.status = "auto-copied ✓"
+			m.status = "auto-copied"
 		}
 		return m, nil
 
@@ -1327,7 +1361,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resultScroll = 0
 		if m.app.Config.AutoCopy && strings.TrimSpace(m.result) != "" {
 			_ = clipboard.WriteAll(strings.TrimSpace(m.result))
-			m.status = "auto-copied ✓"
+			m.status = "auto-copied"
 		}
 		return m, nil
 
@@ -1419,18 +1453,15 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 			SourceLang: m.app.SourceLang,
 			TargetLang: m.app.TargetLang,
 		}
-		outCh, errCh, _, _, err := m.app.Translation.TranslateStream(ctx, req)
-		if err != nil {
-			m.loading = false
-			m.focusOutput = false
-			m.status = err.Error()
-			cancel()
-			m.cancel = nil
-			return m, nil
+		m.streamID++
+		id := m.streamID
+		// Starting a stream performs the provider's HTTP round trip, which can
+		// block until response headers arrive. Run it as a command so the
+		// loading indicator paints immediately instead of after the round trip.
+		return m, func() tea.Msg {
+			outCh, errCh, _, _, err := m.app.Translation.TranslateStream(ctx, req)
+			return streamStartMsg{id: id, chunks: outCh, errs: errCh, err: err}
 		}
-		m.chunks = outCh
-		m.errs = errCh
-		return m, waitForChunk(outCh, errCh)
 	}
 
 	// analyze mode
@@ -1845,7 +1876,7 @@ func (m Model) handleSlashCommand(raw string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func waitForChunk(ch <-chan string, errCh <-chan error) tea.Cmd {
+func waitForChunk(id int, ch <-chan string, errCh <-chan error) tea.Cmd {
 	return func() tea.Msg {
 		select {
 		case c, ok := <-ch:
@@ -1853,18 +1884,18 @@ func waitForChunk(ch <-chan string, errCh <-chan error) tea.Cmd {
 				select {
 				case e := <-errCh:
 					if e != nil {
-						return streamErrMsg{err: e}
+						return streamErrMsg{id: id, err: e}
 					}
 				default:
 				}
-				return streamDoneMsg{}
+				return streamDoneMsg{id: id}
 			}
-			return streamChunkMsg(c)
+			return streamChunkMsg{id: id, chunk: c}
 		case e := <-errCh:
 			if e != nil {
-				return streamErrMsg{err: e}
+				return streamErrMsg{id: id, err: e}
 			}
-			return streamDoneMsg{}
+			return streamDoneMsg{id: id}
 		}
 	}
 }
@@ -2164,10 +2195,12 @@ func (m Model) renderResultCard(cardWidth, cardHeight int) string {
 		lines := make([]string, contentHeight)
 		message := "Translation appears here"
 		style := m.styles.EmptyState
-		if m.loading {
+		if m.loading && m.mode == ModeAnalyze {
+			// Analysis has no streamed output, so the center of the result
+			// card is the only place where progress can be shown.
 			statusText := strings.ReplaceAll(m.status, "\n", " ")
 			if statusText == "" {
-				statusText = "Translating…"
+				statusText = "Analyzing…"
 			}
 			message = m.spinner.View() + " " + statusText
 			style = m.styles.StatusWarning
@@ -2206,7 +2239,7 @@ func (m Model) resultMeta(scroll, visible, total int) string {
 	if m.loading {
 		if total > visible {
 			last := min(total, scroll+visible)
-			return fmt.Sprintf("%s %d–%d / %d", m.spinner.View(), scroll+1, last, total)
+			return fmt.Sprintf("%d–%d / %d", scroll+1, last, total)
 		}
 		return ""
 	}
@@ -2416,6 +2449,11 @@ func (m Model) renderHintLine(hints []keyHint, width int) string {
 func (m Model) footerStatus() (string, lipgloss.Style, bool) {
 	statusText := strings.ReplaceAll(m.status, "\n", " ")
 	if m.loading {
+		// Analyze mode already shows the only loading indicator in the center
+		// of the result card, so the footer stays free for its shortcuts.
+		if m.mode == ModeAnalyze {
+			return "", m.styles.StatusWarning, false
+		}
 		if statusText == "" {
 			statusText = "Working…"
 		}

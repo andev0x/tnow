@@ -86,11 +86,11 @@ The TUI uses `TranslateStream`, which calls the provider with `Stream: true` and
 
 ### Word analysis
 
-1. `analysis.Engine.Analyze` resolves the source language (falling back to English for auto) and builds a strict JSON schema prompt.
+1. `analysis.Engine.Analyze` resolves the source language (using heuristic detection when it is `auto`) and builds a strict JSON schema prompt that names both the input and output languages.
 2. The runtime performs one non-streaming call with `max_tokens = 1024`, `temperature = 0.2`.
 3. `analysis.Parse` strips accidental Markdown fences and unmarshals the JSON.
 4. `analysis.Validate` requires a word and at least one definition with a meaning; examples, if present, must have source and translation.
-5. Missing word/language fields are filled from the request.
+5. Missing word fields are filled from the request; the resolved source language overwrites any model-supplied language label so the report cannot contradict the request.
 6. The CLI renders a text report; the TUI renders a structured result.
 
 ## Core contracts

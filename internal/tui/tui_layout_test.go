@@ -44,7 +44,7 @@ func TestSlashMenuShowsAndSurvivesRootEnter(t *testing.T) {
 		t.Fatal("expected slash suggestions after typing /")
 	}
 	view := ansi.Strip(m.View())
-	for _, want := range []string{"COMMANDS", "/models", "/to <language|country>", "/quit"} {
+	for _, want := range []string{"Commands", "/models", "/to <language|country>", "/quit"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("expected slash menu to contain %q, got:\n%s", want, view)
 		}
@@ -73,7 +73,7 @@ func TestSlashMenuWorksAfterMultilineText(t *testing.T) {
 	if !m.hasSuggestions() {
 		t.Fatal("expected suggestions for a slash command on the last line")
 	}
-	if !strings.Contains(ansi.Strip(m.View()), "COMMANDS") {
+	if !strings.Contains(ansi.Strip(m.View()), "Commands") {
 		t.Fatal("expected the command menu to be rendered")
 	}
 }
@@ -88,7 +88,7 @@ func TestSlashMenuVisibleInShortSplitPane(t *testing.T) {
 	m = tm.(Model)
 
 	view := ansi.Strip(m.View())
-	for _, want := range []string{"COMMANDS", "/models"} {
+	for _, want := range []string{"Commands", "/models"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("short split pane should still show %q:\n%s", want, view)
 		}
@@ -153,38 +153,32 @@ func TestSplitPaneLayoutFitsTerminal(t *testing.T) {
 			}
 		}
 		plain := ansi.Strip(view)
-		if !strings.Contains(plain, "INPUT") {
+		if !strings.Contains(plain, "Input") {
 			t.Errorf("%dx%d view is missing the INPUT title", size.width, size.height)
 		}
-		if size.height >= 18 && !strings.Contains(plain, "TRANSLATION") {
+		if size.height >= 18 && !strings.Contains(plain, "Translation") {
 			t.Errorf("%dx%d view is missing the TRANSLATION title", size.width, size.height)
 		}
 	}
 }
 
-func assertCenteredBorderTitle(t *testing.T, view, title string) {
+func assertTopLeftBorderTitle(t *testing.T, view, title string) {
 	t.Helper()
+	prefix := "╭─ " + title
 	for _, line := range strings.Split(view, "\n") {
 		plain := strings.TrimSpace(ansi.Strip(line))
-		if !strings.Contains(plain, title) || !strings.HasPrefix(plain, "╭") {
-			continue
+		if strings.HasPrefix(plain, prefix) {
+			return
 		}
-		index := strings.Index(plain, title)
-		left := strings.Count(strings.TrimPrefix(plain[:index], "╭"), "─")
-		right := strings.Count(strings.TrimSuffix(plain[index+len(title):], "╮"), "─")
-		if diff := left - right; diff < -1 || diff > 1 {
-			t.Errorf("title %q is not centered: %d dashes left, %d right (%q)", title, left, right, plain)
-		}
-		return
 	}
-	t.Errorf("could not find %q on a top border", title)
+	t.Errorf("could not find %q as a top-left border title", title)
 }
 
-func TestInputAndTranslationTitlesAreCentered(t *testing.T) {
+func TestInputAndTranslationTitlesAreTopLeft(t *testing.T) {
 	m := testModelWithProviders(t)
 	view := ansi.Strip(m.View())
-	assertCenteredBorderTitle(t, view, "INPUT")
-	assertCenteredBorderTitle(t, view, "TRANSLATION")
+	assertTopLeftBorderTitle(t, view, "Input")
+	assertTopLeftBorderTitle(t, view, "Translation")
 }
 
 func TestModelsBrowserSeparatesProvidersAndModels(t *testing.T) {
@@ -201,7 +195,7 @@ func TestModelsBrowserSeparatesProvidersAndModels(t *testing.T) {
 	}
 
 	view := ansi.Strip(m.View())
-	for _, want := range []string{"PROVIDERS", "MODELS · groq", "Context", "Vision", "Tools"} {
+	for _, want := range []string{"Providers", "Models · groq", "Context", "Vision", "Tools"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("models browser missing %q:\n%s", want, view)
 		}
@@ -236,7 +230,7 @@ func TestModelsBrowserFitsSplitPane(t *testing.T) {
 				t.Errorf("%dx%d browser line width %d exceeds terminal width: %q", size.width, size.height, ansi.StringWidth(line), ansi.Strip(line))
 			}
 		}
-		if !strings.Contains(ansi.Strip(view), "MODEL CONTROL") {
+		if !strings.Contains(ansi.Strip(view), "Model Control") {
 			t.Errorf("%dx%d browser is missing its title", size.width, size.height)
 		}
 	}
@@ -246,10 +240,12 @@ func TestModelsBrowserFitsSplitPane(t *testing.T) {
 func cardHeight(view, title string) int {
 	lines := strings.Split(view, "\n")
 	start := -1
+	column := -1
 	for i, line := range lines {
 		plain := ansi.Strip(line)
 		if strings.Contains(plain, title) && strings.Contains(plain, "╭") {
 			start = i
+			column = strings.Index(plain, "╭")
 			break
 		}
 	}
@@ -257,7 +253,8 @@ func cardHeight(view, title string) int {
 		return 0
 	}
 	for i := start; i < len(lines); i++ {
-		if strings.Contains(ansi.Strip(lines[i]), "╰") {
+		plain := ansi.Strip(lines[i])
+		if strings.Index(plain, "╰") == column {
 			return i - start + 1
 		}
 	}
@@ -268,7 +265,7 @@ func TestInputCardHeightIsStable(t *testing.T) {
 	m := testModelWithProviders(t)
 	// A reference result-card height before the slash menu replaces it.
 	baseView := ansi.Strip(m.View())
-	resultHeight := cardHeight(baseView, "TRANSLATION")
+	resultHeight := cardHeight(baseView, "Translation")
 	if resultHeight == 0 {
 		t.Fatal("expected a translation card at the default test size")
 	}
@@ -293,7 +290,7 @@ func TestInputCardHeightIsStable(t *testing.T) {
 		m.input.CursorEnd()
 		view := ansi.Strip(m.View())
 
-		got := cardHeight(view, "INPUT")
+		got := cardHeight(view, "Input")
 		if got == 0 {
 			t.Fatalf("%s: input card not found:\n%s", tc.name, view)
 		}
@@ -304,17 +301,20 @@ func TestInputCardHeightIsStable(t *testing.T) {
 		}
 
 		if strings.HasPrefix(strings.TrimSpace(tc.value), "/") {
-			menuTitle := "COMMANDS"
+			menuTitle := "Commands"
 			if strings.HasPrefix(strings.TrimSpace(tc.value), "/to") {
-				menuTitle = "LANGUAGES"
+				menuTitle = "Languages"
 			}
-			if got := cardHeight(view, menuTitle); got != resultHeight {
-				t.Errorf("%s: suggestion card height = %d, want result height %d:\n%s", tc.name, got, resultHeight, view)
+			if got := cardHeight(view, menuTitle); got == 0 {
+				t.Errorf("%s: suggestion popup missing:\n%s", tc.name, view)
 			}
-			if !strings.Contains(view, "Alt+Enter translate") {
-				t.Errorf("%s: footer must remain visible while the command menu is open:\n%s", tc.name, view)
+			if got := cardHeight(view, "Translation"); got != resultHeight {
+				t.Errorf("%s: output card height = %d, want stable %d:\n%s", tc.name, got, resultHeight, view)
 			}
-		} else if got := cardHeight(view, "TRANSLATION"); got != resultHeight {
+			if !strings.Contains(view, "Navigate") || !strings.Contains(view, "Close") {
+				t.Errorf("%s: footer must show menu-specific shortcuts:\n%s", tc.name, view)
+			}
+		} else if got := cardHeight(view, "Translation"); got != resultHeight {
 			t.Errorf("%s: result card height = %d, want stable %d:\n%s", tc.name, got, resultHeight, view)
 		}
 	}
@@ -343,7 +343,7 @@ func TestModelsBrowserHeightIsStable(t *testing.T) {
 		m.modelCache["groq"] = models
 		m.mbModelIdx = 0
 		view := ansi.Strip(m.View())
-		return cardHeight(view, "MODEL CONTROL"), view
+		return cardHeight(view, "Model Control"), view
 	}
 
 	shortHeight, shortView := measure([]string{"llama-3.3-70b-versatile", "gemma2-9b-it"})
@@ -394,7 +394,7 @@ func TestShortPaneSlashKeepsTypedLineVisible(t *testing.T) {
 	if !strings.Contains(view, "seven") || !strings.Contains(view, "/") {
 		t.Fatalf("the slash line and its context should stay visible in a short pane:\n%s", view)
 	}
-	if got := cardHeight(view, "INPUT"); got == 0 {
+	if got := cardHeight(view, "Input"); got == 0 {
 		t.Fatalf("input card disappeared in a short pane:\n%s", view)
 	}
 }
@@ -426,21 +426,31 @@ func TestToLanguageSuggestions(t *testing.T) {
 	if kind != "language" {
 		t.Fatalf("suggestion kind = %q, want language", kind)
 	}
-	if title != "LANGUAGES" {
-		t.Errorf("suggestion title = %q, want LANGUAGES", title)
+	if title != "Languages" {
+		t.Errorf("suggestion title = %q, want Languages", title)
 	}
 	if len(items) != len(language.All()) {
 		t.Errorf("language suggestions = %d, want %d", len(items), len(language.All()))
 	}
+	if len(items) == 0 || items[0] != string(language.VI) {
+		t.Errorf("active target should be pinned first, got %v", items)
+	}
 
 	view := ansi.Strip(m.View())
-	for _, want := range []string{"LANGUAGES", "vi · Vietnamese · Vietnam", "ja · Japanese · Japan"} {
+	for _, want := range []string{"Languages", "vi · Vietnamese · Vietnam"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("language menu missing %q:\n%s", want, view)
 		}
 	}
-	if h := cardHeight(view, "INPUT"); h == 0 {
+	if h := cardHeight(view, "Input"); h == 0 {
 		t.Fatalf("input card missing:\n%s", view)
+	}
+
+	m.input.SetValue("/to ja")
+	m.input.CursorEnd()
+	kind, items, _, _ = m.suggestionItems()
+	if kind != "language" || len(items) == 0 || items[0] != "ja" {
+		t.Fatalf("language search = kind %q, items %v; want Japanese first", kind, items)
 	}
 
 	m.input.SetValue("/to mexi")

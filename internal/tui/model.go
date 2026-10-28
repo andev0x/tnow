@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andev0x/tnow/internal/analysis"
 	"github.com/andev0x/tnow/internal/app"
@@ -263,8 +264,9 @@ type Model struct {
 	mbModelIdx        int
 	mbSearchInput     textinput.Model
 
-	// result viewport scroll
+	// result viewport scroll and panel focus
 	resultScroll int
+	focusOutput  bool
 
 	styles Styles
 }
@@ -273,15 +275,28 @@ func NewModel(a *app.App) Model {
 	styles := DefaultStyles()
 
 	ta := textarea.New()
-	ta.Placeholder = "Type or paste text…  Alt+Enter to translate"
+	ta.Placeholder = "Type or paste text…"
 	ta.Focus()
 	ta.ShowLineNumbers = false
+	ta.Prompt = ""
 	ta.SetHeight(4)
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextMuted))
-	ta.FocusedStyle.Text = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextPrimary))
-	ta.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextDim))
-	ta.BlurredStyle.Text = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextSecondary))
+
+	// Paint every textarea surface explicitly. The screen compositor stains
+	// transparent cells as a final safety net, but keeping the widget styles
+	// opaque avoids mixed backgrounds around the cursor and wrapped lines.
+	panelBG := lipgloss.NewStyle().Background(lipgloss.Color(ColorBgPanel))
+	ta.FocusedStyle.Base = panelBG
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle().Background(lipgloss.Color(ColorBgPanel))
+	ta.FocusedStyle.EndOfBuffer = panelBG
+	ta.FocusedStyle.LineNumber = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextDim)).Background(lipgloss.Color(ColorBgPanel))
+	ta.FocusedStyle.CursorLineNumber = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorBorderFocused)).Background(lipgloss.Color(ColorBgPanel))
+	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextMuted)).Background(lipgloss.Color(ColorBgPanel))
+	ta.FocusedStyle.Text = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextPrimary)).Background(lipgloss.Color(ColorBgPanel))
+	ta.BlurredStyle.Base = panelBG
+	ta.BlurredStyle.CursorLine = panelBG
+	ta.BlurredStyle.EndOfBuffer = panelBG
+	ta.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextDim)).Background(lipgloss.Color(ColorBgPanel))
+	ta.BlurredStyle.Text = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextSecondary)).Background(lipgloss.Color(ColorBgPanel))
 
 	ti := textinput.New()
 	ti.Placeholder = "e.g. gpt-4o, llama3.2:3b"
@@ -359,8 +374,8 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) cardWidth() int {
 	w := m.width - 4
-	if w > 92 {
-		w = 92
+	if w > 100 {
+		w = 100
 	}
 	if m.width > 0 && w > m.width-2 {
 		w = m.width - 2
@@ -381,61 +396,41 @@ func (m Model) effectiveHeight() int {
 }
 
 // layoutSizes returns card heights that depend only on the terminal height.
-// Nothing about the draft, the slash menu, the model list, or the result can
-// change these values, which is what keeps the screen from jumping while the
-// user types.
+// Nothing about the draft, the slash palette, the model list, or the result
+// can change these values, which is what keeps the screen from jumping while
+// the user types.
 //
 // The main screen is assembled as:
 //
-//	header (2) + blank (1) + input (H) + [blank (1) + result (R)] + status (1) + footer (1)
+//	header (2) + blank (1) + input (I) + blank (1) + output (O) + footer (1)
+//
+// so I+O == height-5 whenever the output panel is visible. The input takes
+// roughly 42% of the body, clamped so the output always has room to read.
 func (m Model) layoutSizes() (inputHeight, resultHeight int) {
 	height := m.effectiveHeight()
-	if height < 10 {
-		return max(3, height-5), 0
+	if height < 11 {
+		// Too short for two useful panels: keep the editor and the footer.
+		return max(2, height-4), 0
 	}
 
-	body := height - 6
-	if body < 8 {
-		// Not enough room for a useful result card: let the editor fill the
-		// body. The footer is only omitted in extremely short panes.
-		return max(3, height-5), 0
+	body := height - 5
+	inputHeight = (body*42 + 50) / 100 // rounded 42%
+	inputHeight = max(4, min(inputHeight, 14))
+	if inputHeight > body-3 {
+		inputHeight = body - 3
 	}
-
-	target := body * 2 / 5
-	target = max(7, min(target, 12))
-	if body-target < 5 {
-		return max(3, height-5), 0
+	inputHeight = max(2, inputHeight)
+	resultHeight = body - inputHeight
+	if resultHeight < 3 {
+		return max(2, height-4), 0
 	}
-	return target, body - target
+	return inputHeight, resultHeight
 }
 
 // inputContentHeight is the number of text lines inside the input frame.
 func (m Model) inputContentHeight() int {
 	inputHeight, _ := m.layoutSizes()
 	return max(1, inputHeight-2)
-}
-
-// inlineMenuHeight is the number of rows reserved for the command menu inside
-// the input card when there is no result card to use. It is fixed while the
-// menu is open so filtering cannot resize the editor.
-func (m Model) inlineMenuHeight() int {
-	_, resultHeight := m.layoutSizes()
-	if resultHeight > 0 || !m.hasSuggestions() {
-		return 0
-	}
-	inputHeight, _ := m.layoutSizes()
-	return min(3, max(1, (inputHeight-2)/2))
-}
-
-// textareaContentHeight is the editor viewport height inside the fixed input
-// card. In very short panes the command menu takes a few rows, but the card
-// itself never changes size.
-func (m Model) textareaContentHeight() int {
-	content := m.inputContentHeight()
-	if menu := m.inlineMenuHeight(); menu > 0 && menu < content {
-		content -= menu
-	}
-	return max(1, content)
 }
 
 // syncInputSize keeps the real textarea viewport in sync with the fixed card.
@@ -446,11 +441,11 @@ func (m Model) syncInputSize() Model {
 	usableWidth := max(1, cardWidth-4)
 	m.input.SetWidth(usableWidth)
 	previousHeight := m.input.Height()
-	m.input.SetHeight(m.textareaContentHeight())
+	m.input.SetHeight(m.inputContentHeight())
 	if m.input.Height() != previousHeight {
 		// SetHeight changes the viewport without scrolling it. A no-op key
 		// update lets the textarea re-anchor the viewport around the cursor,
-		// so opening the inline command menu never hides the line being typed.
+		// so a resize never hides the line being typed.
 		m.input, _ = m.input.Update(tea.KeyMsg{Type: tea.KeyRunes})
 	}
 	return m
@@ -459,12 +454,12 @@ func (m Model) syncInputSize() Model {
 // suggestionItems returns the current suggestion list and its kind.
 func (m Model) suggestionItems() (kind string, items []string, title, hint string) {
 	if _, query, ok := slashLanguageQuery(m.input.Value()); ok {
-		suggestions := language.Suggest(query)
+		suggestions := m.languageSuggestions(query)
 		if len(suggestions) > 0 {
 			for _, suggestion := range suggestions {
 				items = append(items, string(suggestion.Language))
 			}
-			return "language", items, "LANGUAGES", "↑↓ select · Tab accept · Enter apply"
+			return "language", items, "Languages", "↑↓ select · Tab accept · Enter apply"
 		}
 	}
 
@@ -472,7 +467,7 @@ func (m Model) suggestionItems() (kind string, items []string, title, hint strin
 	if len(sugs) == 0 {
 		return "", nil, "", ""
 	}
-	title = "COMMANDS"
+	title = "Commands"
 	for _, s := range sugs {
 		items = append(items, s.Name)
 	}
@@ -483,6 +478,28 @@ func (m Model) suggestionItems() (kind string, items []string, title, hint strin
 func (m Model) hasSuggestions() bool {
 	kind, _, _, _ := m.suggestionItems()
 	return kind != ""
+}
+
+// languageSuggestions keeps the CLI resolver order for real queries, but pins
+// the active target language at the top of the unfiltered picker. That makes
+// the current choice visible immediately in a compact popup.
+func (m Model) languageSuggestions(query string) []language.Suggestion {
+	suggestions := language.Suggest(query)
+	if strings.TrimSpace(query) != "" || m.app.TargetLang == language.Auto {
+		return suggestions
+	}
+	for i, suggestion := range suggestions {
+		if suggestion.Language != m.app.TargetLang {
+			continue
+		}
+		if i > 0 {
+			pinned := suggestions[i]
+			copy(suggestions[1:i+1], suggestions[:i])
+			suggestions[0] = pinned
+		}
+		break
+	}
+	return suggestions
 }
 
 func splitInputForApply(value string) (retained string, slashLine string) {
@@ -1008,6 +1025,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.result = ""
 			m.analysisResult = nil
 			m.resultScroll = 0
+			m.focusOutput = false
 			m.status = ""
 			m.input.Focus()
 			return m, nil
@@ -1018,8 +1036,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.highlightInput.SetValue("")
 				return m, nil
 			}
-			if m.suggestIdx != -1 {
+			if m.hasSuggestions() {
+				// Close the palette without discarding a translation draft
+				// that sits on the lines above the slash command.
+				retained, _ := splitInputForApply(m.input.Value())
+				m.input.SetValue(retained)
+				m.input.CursorEnd()
 				m.suggestIdx = -1
+				m.status = ""
+				m = m.syncInputSize()
 				return m, nil
 			}
 			if m.loading && m.cancel != nil {
@@ -1028,19 +1053,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "cancelled"
 				return m, nil
 			}
+			if m.focusOutput {
+				m.focusOutput = false
+				return m, nil
+			}
 			return m, nil
 
 		case "tab":
 			if m.mode == ModeQuick {
 				m.mode = ModeAnalyze
-				m.input.Placeholder = "Type a word or short phrase…  Alt+Enter to analyze"
+				m.input.Placeholder = "Type a word or phrase…"
 			} else {
 				m.mode = ModeQuick
-				m.input.Placeholder = "Type or paste text…  Alt+Enter to translate"
+				m.input.Placeholder = "Type or paste text…"
 			}
 			m.result = ""
 			m.analysisResult = nil
 			m.resultScroll = 0
+			m.focusOutput = false
 			m.status = ""
 			m.suggestIdx = -1
 			return m, nil
@@ -1083,16 +1113,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case "pgup", "ctrl+u", "alt+up":
-			if m.resultScroll > 0 {
-				m.resultScroll--
-				if m.resultScroll < 0 {
-					m.resultScroll = 0
-				}
-			}
+		case "pgup":
+			m.scrollResult(-m.resultPageStep())
 			return m, nil
-		case "pgdown", "alt+down", "ctrl+down":
-			m.resultScroll++
+		case "pgdown":
+			m.scrollResult(m.resultPageStep())
+			return m, nil
+		case "ctrl+u", "alt+up":
+			m.scrollResult(-1)
+			return m, nil
+		case "alt+down", "ctrl+down":
+			m.scrollResult(1)
 			return m, nil
 
 		case "ctrl+s", "ctrl+enter", "alt+enter", "ctrl+j":
@@ -1121,6 +1152,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.loading = false
+		m.focusOutput = false
 		m.status = msg.err.Error()
 		m.cancel = nil
 		return m, nil
@@ -1130,6 +1162,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.loading = false
+		m.focusOutput = true
 		m.cancel = nil
 		m.status = "done"
 		m.resultScroll = 0
@@ -1143,9 +1176,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case analysisDoneMsg:
 		m.loading = false
 		if msg.err != nil {
+			m.focusOutput = false
 			m.status = msg.err.Error()
 			return m, nil
 		}
+		m.focusOutput = true
 		m.analysisResult = &msg.res
 		m.result = formatAnalysis(msg.res)
 		m.status = "done"
@@ -1208,8 +1243,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.input.Value() != prevVal {
 		m.suggestIdx = -1
 	}
-	// The draft may have just added/removed a slash command, which changes
-	// the inline menu reservation in very short panes.
+	// Any editor key returns the visual focus to the input panel.
+	m.focusOutput = false
 	m = m.syncInputSize()
 	return m, cmd
 }
@@ -1231,6 +1266,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	m.result = ""
 	m.analysisResult = nil
 	m.resultScroll = 0
+	m.focusOutput = true
 	m.status = "translating..."
 	m.loading = true
 
@@ -1246,6 +1282,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		outCh, errCh, _, _, err := m.app.Translation.TranslateStream(ctx, req)
 		if err != nil {
 			m.loading = false
+			m.focusOutput = false
 			m.status = err.Error()
 			cancel()
 			m.cancel = nil
@@ -1532,16 +1569,16 @@ func (m Model) handleSlashCommand(raw string) (tea.Model, tea.Cmd) {
 			m.mode = ModeAnalyze
 			// if there was retained translation, args take precedence
 			m.input.SetValue(strings.Join(args, " "))
-			m.input.Placeholder = "Type a word or short phrase…  Alt+Enter to analyze"
+			m.input.Placeholder = "Type a word or phrase…"
 			m.status = "word analysis mode"
 		} else {
 			if m.mode == ModeQuick {
 				m.mode = ModeAnalyze
-				m.input.Placeholder = "Type a word or short phrase…  Alt+Enter to analyze"
+				m.input.Placeholder = "Type a word or phrase…"
 				m.status = "word analysis mode"
 			} else {
 				m.mode = ModeQuick
-				m.input.Placeholder = "Type or paste text…  Alt+Enter to translate"
+				m.input.Placeholder = "Type or paste text…"
 				m.status = "quick translation mode"
 			}
 			restoreRetained()
@@ -1611,14 +1648,12 @@ func (m Model) View() string {
 	if width == 0 {
 		width = 80
 	}
-	height := m.height
-	if height == 0 {
-		height = 24
-	}
+	height := m.effectiveHeight()
 	cardWidth := m.cardWidth()
+	cardX := max(0, (width-cardWidth)/2)
 
-	// Overlays take priority and stay in the same centered frame language as
-	// the main screen.
+	// Overlays take priority. They are painted on the same opaque canvas as
+	// the main screen so dialogs never inherit terminal or panel artifacts.
 	if m.showAPIKey {
 		return m.renderAPIKeyModal()
 	}
@@ -1628,268 +1663,137 @@ func (m Model) View() string {
 			"Configure Model",
 			"Enter model identifier:",
 			m.modelInput.View(),
-			"Enter to save  •  Esc to cancel",
+			"Enter to save  ·  Esc to cancel",
 		)
 	}
 	if m.showHighlight {
 		m.highlightInput.Width = max(12, min(54, m.width-24))
 		return m.renderModal(
 			"Highlight Sections / Terms",
-			"Enter section name, word, or pattern to highlight:",
+			"Enter a word or pattern to highlight:",
 			m.highlightInput.View(),
-			"Enter to apply  •  Esc to dismiss",
+			"Enter to apply  ·  Esc to dismiss",
 		)
 	}
 	if m.showModelsBrowser {
 		return m.renderModelsBrowser()
 	}
 
-	// Input and result heights are fixed for the current terminal size. The
-	// slash menu never adds rows to the input card: in normal layouts it uses
-	// the result slot, and in very short panes it replaces a few editor rows
-	// inside the same fixed frame.
 	inputHeight, resultHeight := m.layoutSizes()
-	suggestionsVisible := m.hasSuggestions()
-	var inlineMenu []string
-	if suggestionsVisible && resultHeight == 0 {
-		inlineMenu = m.inlineCommandLines(cardWidth-4, m.inlineMenuHeight())
+	inputY := 3
+	outputY := inputY + inputHeight + 1
+	footerY := max(0, height-1)
+
+	layers := []screenLayer{
+		{x: cardX, y: 0, width: cardWidth, height: 2, text: m.renderHeader(cardWidth), bg: ColorBgBase},
+		{x: cardX, y: inputY, width: cardWidth, height: inputHeight, text: m.renderInputCard(cardWidth, inputHeight), bg: ColorBgPanel},
 	}
-
-	headerBar := m.renderHeader(cardWidth)
-	inputFrame := m.renderInputCard(cardWidth, inputHeight, inlineMenu)
-
-	statusLine := m.renderStatusLine()
-	if statusLine == "" {
-		statusLine = " "
-	}
-	footer := m.renderFooter(cardWidth)
-
-	var b strings.Builder
-	b.WriteString(headerBar)
-	b.WriteString("\n\n")
-	b.WriteString(inputFrame)
 	if resultHeight > 0 {
-		b.WriteString("\n\n")
-		if suggestionsVisible {
-			b.WriteString(m.renderCommandCard(cardWidth, resultHeight))
-		} else {
-			b.WriteString(m.renderResultCard(cardWidth, resultHeight))
-		}
+		layers = append(layers, screenLayer{
+			x: cardX, y: outputY, width: cardWidth, height: resultHeight,
+			text: m.renderResultCard(cardWidth, resultHeight), bg: ColorBgPanel,
+		})
 	}
-	b.WriteString("\n")
-	b.WriteString(fitLine(statusLine, cardWidth))
-	if height >= 8 {
-		b.WriteString("\n")
-		b.WriteString(fitLine(footer, cardWidth))
-	}
+	layers = append(layers, screenLayer{
+		x: cardX, y: footerY, width: cardWidth, height: 1,
+		text: m.renderFooter(cardWidth), bg: ColorBgBar,
+	})
 
-	content := b.String()
-	lines := strings.Split(content, "\n")
-	if len(lines) > height {
-		lines = lines[:height]
-	}
-	content = strings.Join(lines, "\n")
-	if width > 0 {
-		content = lipgloss.PlaceHorizontal(width, lipgloss.Center, content)
-	}
-	if height > 0 {
-		content = lipgloss.PlaceVertical(height, lipgloss.Center, content)
-	}
-	return content
-}
+	// The slash palette is a true floating overlay. It never changes the base
+	// card heights; filtering only redraws inside the same fixed popup.
+	if m.hasSuggestions() && cardWidth >= 14 {
+		popupWidth, popupHeight := 0, 0
+		var popupX, popupY int
+		withShadow := false
 
-// pagedSuggestionLines renders an arbitrary suggestion list into a fixed
-// number of rows. The window follows the selected row and reports overflow in
-// the hint row without changing the surrounding card height.
-func (m Model) pagedSuggestionLines(width, maxLines, total int, hint string, row func(int) string) []string {
-	if maxLines <= 0 || total <= 0 {
-		return nil
-	}
-
-	hintRows := 0
-	if maxLines >= 4 {
-		hintRows = 1
-	}
-	listRows := maxLines - hintRows
-	if listRows < 1 {
-		listRows = maxLines
-		hintRows = 0
-	}
-
-	focus := m.suggestIdx
-	if focus < 0 || focus >= total {
-		focus = 0
-	}
-	start := 0
-	if focus >= listRows {
-		start = focus - listRows + 1
-	}
-	if start+listRows > total {
-		start = max(0, total-listRows)
-	}
-	end := min(total, start+listRows)
-
-	lines := make([]string, 0, maxLines)
-	for i := start; i < end; i++ {
-		lines = append(lines, row(i))
-	}
-	if hintRows > 0 && len(lines) < maxLines {
-		if width < 56 {
-			hint = "↑↓ · Tab · Esc"
-		}
-		if width < 38 {
-			hint = "↑↓ · Tab"
-		}
-		if start > 0 || end < total {
-			hint += fmt.Sprintf("  %d-%d/%d", start+1, end, total)
-		}
-		lines = append(lines, fitLine(m.styles.BoxMeta.Render("  "+hint), width))
-	}
-	return lines
-}
-
-// suggestionLines dispatches to the command or language renderer.
-func (m Model) suggestionLines(width, maxLines int) []string {
-	kind, _, _, _ := m.suggestionItems()
-	if kind == "language" {
-		return m.languageLines(width, maxLines)
-	}
-	return m.commandLines(width, maxLines)
-}
-
-// commandLines renders the slash command list.
-func (m Model) commandLines(width, maxLines int) []string {
-	suggestions := slashSuggestionsFor(m.input.Value())
-	if len(suggestions) == 0 {
-		return nil
-	}
-	return m.pagedSuggestionLines(width, maxLines, len(suggestions), "↑↓ select · Tab accept · Esc close", func(i int) string {
-		command := suggestions[i]
-		usage := command.Usage
-		description := command.Description
-		if width < 54 {
-			description = ""
-		}
-		if i == m.suggestIdx {
-			line := " ▸ " + usage
-			if description != "" {
-				line += "  " + description
+		switch {
+		case resultHeight >= 6:
+			// Normal panes: float inside the output panel, leaving its title
+			// and bottom border visible around the dropdown.
+			available := resultHeight - 2
+			popupWidth = min(cardWidth-4, 78)
+			if popupWidth < 12 {
+				popupWidth = max(4, cardWidth-2)
 			}
-			return m.styles.SuggestActive.Render(fitLine(line, width))
+			popupHeight = min(7, available)
+			popupX = cardX + (cardWidth-popupWidth)/2
+			popupY = outputY + 1
+			withShadow = true
+		case resultHeight > 0:
+			// Very short panes: use the output slot as the popup surface.
+			// This avoids overlapping the input or leaving border fragments
+			// from a panel too small to contain an inset dialog.
+			popupWidth = cardWidth
+			popupHeight = resultHeight
+			popupX = cardX
+			popupY = outputY
+		default:
+			// No output panel: float over the lower part of the editor while
+			// keeping the panel title and the line being typed visible.
+			popupWidth = cardWidth
+			popupHeight = min(inputHeight, min(5, max(3, inputHeight-2)))
+			popupX = cardX
+			popupY = inputY + inputHeight - popupHeight
 		}
-		line := "  " + m.styles.SuggestIdle.Render(usage)
-		if description != "" {
-			line += "  " + m.styles.BoxMeta.Render(description)
+
+		if popupWidth >= 8 && popupHeight >= 3 {
+			popup := m.renderCommandPopup(popupWidth, popupHeight)
+			if withShadow {
+				layers = append(layers, screenLayer{
+					x: popupX + 1, y: popupY + 1, width: popupWidth,
+					height: max(1, popupHeight-1), bg: ColorBgShadow,
+				})
+			}
+			layers = append(layers, screenLayer{
+				x: popupX, y: popupY, width: popupWidth,
+				height: popupHeight, text: popup, bg: ColorBgRaised,
+			})
 		}
-		return fitLine(line, width)
-	})
+	}
+
+	return renderScreen(width, height, ColorBgBase, layers...)
 }
 
-// languageLines renders /to suggestions. Each row shows the code, display
-// name, and a representative region so country-name input is easy to verify.
-func (m Model) languageLines(width, maxLines int) []string {
-	_, query, ok := slashLanguageQuery(m.input.Value())
-	if !ok {
-		return nil
-	}
-	suggestions := language.Suggest(query)
-	if len(suggestions) == 0 {
-		return nil
-	}
-	return m.pagedSuggestionLines(width, maxLines, len(suggestions), "↑↓ select · Tab accept · Enter apply", func(i int) string {
-		suggestion := suggestions[i]
-		label := string(suggestion.Language) + " · " + suggestion.Name
-		if suggestion.Region != "" && width >= 44 {
-			label += " · " + suggestion.Region
-		}
-		if i == m.suggestIdx {
-			return m.styles.SuggestActive.Render(fitLine(" ▸ "+label, width))
-		}
-		return fitLine("  "+label, width)
-	})
-}
-
-// inlineCommandLines is the short-pane fallback. It keeps the suggestion menu
-// inside the fixed input frame when there is no result card to borrow.
-func (m Model) inlineCommandLines(width, maxLines int) []string {
-	if maxLines <= 0 {
-		return nil
-	}
-	if maxLines == 1 {
-		return m.suggestionLines(width, 1)
-	}
-	_, _, title, _ := m.suggestionItems()
-	if title == "" {
-		title = "COMMANDS"
-	}
-	lines := []string{fitLine(m.styles.BoxLabel.Render(title), width)}
-	lines = append(lines, m.suggestionLines(width, maxLines-1)...)
-	for len(lines) < maxLines {
-		lines = append(lines, "")
-	}
-	if len(lines) > maxLines {
-		lines = lines[:maxLines]
-	}
-	return lines
-}
-
-// renderCommandCard replaces the result card while a suggestion menu is open.
-// It has exactly the same dimensions as the result card, so opening or closing
-// the menu cannot move any other part of the screen.
-func (m Model) renderCommandCard(cardWidth, cardHeight int) string {
-	if cardHeight < 3 {
-		cardHeight = 3
-	}
-	contentHeight := max(1, cardHeight-2)
-	lines := m.suggestionLines(cardWidth-4, contentHeight)
-
-	kind, items, title, _ := m.suggestionItems()
-	if kind == "" || title == "" {
-		title = "COMMANDS"
-	}
-	// When every match does not fit, put the total in the title so the
-	// truncation is explicit without spending a list row on it.
-	rows := contentHeight
-	if rows >= 4 {
-		rows--
-	}
-	if len(items) > rows {
-		title = fmt.Sprintf("%s · %d", title, len(items))
-	}
-	return m.titledCard(title, lines, cardWidth, cardHeight, true)
-}
-
-func (m Model) renderHeader(cardWidth int) string {
-	logo := m.styles.Logo.Render("◆ tnow")
-
-	var quickMode, analyzeMode string
-	if m.mode == ModeQuick {
-		quickMode = m.styles.ModeActive.Render("Quick")
-		analyzeMode = m.styles.ModeInactive.Render("Analyze")
-	} else {
-		quickMode = m.styles.ModeInactive.Render("Quick")
-		analyzeMode = m.styles.ModeActive.Render("Analyze")
-	}
-	modeCluster := lipgloss.JoinHorizontal(lipgloss.Center, quickMode, " ", analyzeMode)
-	if cardWidth < 50 {
-		// In a narrow split pane keep the language badge visible instead of
-		// spending the row on the inactive mode.
-		if m.mode == ModeQuick {
-			modeCluster = quickMode
-		} else {
-			modeCluster = analyzeMode
-		}
-	}
-
+// langPair is the compact language indicator used by the header and output
+// panel metadata.
+func (m Model) langPair() string {
 	src := strings.ToUpper(string(m.app.SourceLang))
 	if src == "" || src == "AUTO" {
 		src = "AUTO"
 	}
 	tgt := strings.ToUpper(string(m.app.TargetLang))
-	langPill := m.styles.BadgePill.Render(fmt.Sprintf("%s → %s", src, tgt))
+	if tgt == "" {
+		tgt = "AUTO"
+	}
+	return src + " → " + tgt
+}
+
+func (m Model) renderHeader(cardWidth int) string {
+	if cardWidth < 2 {
+		return ""
+	}
+	logo := m.styles.Logo.Render("◆ tnow")
+
+	quick := "Quick"
+	analyze := "Analyze"
+	var quickTab, analyzeTab string
+	if m.mode == ModeQuick {
+		quickTab = m.styles.ModeActive.Render(quick)
+		analyzeTab = m.styles.ModeInactive.Render(analyze)
+	} else {
+		quickTab = m.styles.ModeInactive.Render(quick)
+		analyzeTab = m.styles.ModeActive.Render(analyze)
+	}
+	modeCluster := lipgloss.JoinHorizontal(lipgloss.Center, quickTab, " ", analyzeTab)
+	if cardWidth < 44 {
+		if m.mode == ModeQuick {
+			modeCluster = quickTab
+		} else {
+			modeCluster = analyzeTab
+		}
+	}
 
 	left := lipgloss.JoinHorizontal(lipgloss.Center, logo, "   ", modeCluster)
-	right := langPill
 
 	modelLabel := strings.TrimSpace(m.app.Provider)
 	if modelLabel == "" {
@@ -1897,59 +1801,119 @@ func (m Model) renderHeader(cardWidth int) string {
 	} else if m.app.Model != "" {
 		modelLabel += " · " + m.app.Model
 	}
-	if cardWidth >= 68 && modelLabel != "" {
-		runes := []rune(modelLabel)
-		if len(runes) > 26 {
-			modelLabel = string(runes[:25]) + "…"
-		}
-		modelPill := m.styles.BadgePill.Render(modelLabel)
-		right = lipgloss.JoinHorizontal(lipgloss.Center, langPill, "  ", modelPill)
+	langPill := m.styles.BadgePill.Render(m.langPair())
+	right := ""
+	if cardWidth >= 24 {
+		right = langPill
+	}
+	if cardWidth >= 72 && modelLabel != "" {
+		modelLabel = ansi.Truncate(modelLabel, 28, "…")
+		right = lipgloss.JoinHorizontal(lipgloss.Center, langPill, "  ", m.styles.HeaderMeta.Render(modelLabel))
 	}
 
-	spacing := cardWidth - lipgloss.Width(left) - lipgloss.Width(right)
-	if spacing < 2 {
+	if lipgloss.Width(left)+lipgloss.Width(right) > cardWidth {
 		right = ""
-		spacing = cardWidth - lipgloss.Width(left)
 	}
-	if spacing < 0 {
-		spacing = 0
+	if lipgloss.Width(left) > cardWidth {
+		if cardWidth >= 30 {
+			modeCluster = quickTab
+			if m.mode == ModeAnalyze {
+				modeCluster = analyzeTab
+			}
+			left = lipgloss.JoinHorizontal(lipgloss.Center, logo, "   ", modeCluster)
+		} else {
+			left = m.styles.Logo.Render("◆")
+		}
 	}
+	if lipgloss.Width(left) > cardWidth {
+		left = ansi.Truncate(left, cardWidth, "…")
+	}
+
+	spacing := max(1, cardWidth-lipgloss.Width(left)-lipgloss.Width(right))
 	topRow := fitLine(left+strings.Repeat(" ", spacing)+right, cardWidth)
 	divider := m.styles.SubtleLine.Render(strings.Repeat("─", cardWidth))
 	return topRow + "\n" + divider
 }
 
-func (m Model) renderInputCard(cardWidth, cardHeight int, menuLines []string) string {
+func (m Model) renderInputCard(cardWidth, cardHeight int) string {
 	if cardHeight < 3 {
 		cardHeight = 3
 	}
 	contentHeight := max(1, cardHeight-2)
-
-	if len(menuLines) >= contentHeight {
-		menuLines = menuLines[:max(0, contentHeight-1)]
-	}
-	textareaHeight := max(1, contentHeight-len(menuLines))
-
 	usableWidth := max(1, cardWidth-4)
 	m.input.SetWidth(usableWidth)
-	m.input.SetHeight(textareaHeight)
+	m.input.SetHeight(contentHeight)
 
 	textareaLines := strings.Split(m.input.View(), "\n")
-	if len(textareaLines) > textareaHeight {
-		textareaLines = textareaLines[:textareaHeight]
+	if len(textareaLines) > contentHeight {
+		textareaLines = textareaLines[:contentHeight]
 	}
-	for len(textareaLines) < textareaHeight {
+	for len(textareaLines) < contentHeight {
 		textareaLines = append(textareaLines, "")
 	}
 
-	title := "INPUT"
+	title := "Input"
 	if m.mode == ModeAnalyze {
-		title = "WORD / PHRASE"
+		title = "Word / Phrase"
 	}
-	lines := make([]string, 0, contentHeight)
-	lines = append(lines, textareaLines...)
-	lines = append(lines, menuLines...)
-	return m.titledCard(title, lines, cardWidth, cardHeight, true)
+	focused := !m.focusOutput && !m.hasSuggestions()
+	return m.titledCard(title, m.inputMeta(), textareaLines, cardWidth, cardHeight, focused)
+}
+
+func (m Model) inputMeta() string {
+	value := m.input.Value()
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	lines := strings.Count(value, "\n") + 1
+	if lines > 1 {
+		return fmt.Sprintf("%d lines", lines)
+	}
+	chars := len([]rune(value))
+	if chars == 1 {
+		return "1 char"
+	}
+	return fmt.Sprintf("%d chars", chars)
+}
+
+// resultText returns the styled content for the output panel. Keeping this in
+// one place lets the panel and the footer overflow hint agree on what is on
+// screen.
+func (m Model) resultText() string {
+	switch {
+	case m.mode == ModeAnalyze && m.analysisResult != nil:
+		return RenderAnalysisStructured(*m.analysisResult, m.highlightQuery, m.styles, m.cardWidth())
+	case m.result != "":
+		return RenderHighlightedText(m.result, m.highlightQuery, m.styles)
+	default:
+		return ""
+	}
+}
+
+func (m Model) resultOverflow() bool {
+	_, resultHeight := m.layoutSizes()
+	if resultHeight < 3 {
+		return false
+	}
+	content := m.resultText()
+	if strings.TrimSpace(content) == "" {
+		return false
+	}
+	usableWidth := max(1, m.cardWidth()-4)
+	return len(wrapANSI(content, usableWidth)) > resultHeight-2
+}
+
+func (m Model) resultPageStep() int {
+	_, resultHeight := m.layoutSizes()
+	return max(1, resultHeight-3)
+}
+
+func (m *Model) scrollResult(delta int) {
+	if m.result == "" && !m.loading {
+		return
+	}
+	m.focusOutput = true
+	m.resultScroll = max(0, m.resultScroll+delta)
 }
 
 func (m Model) renderResultCard(cardWidth, cardHeight int) string {
@@ -1957,49 +1921,36 @@ func (m Model) renderResultCard(cardWidth, cardHeight int) string {
 		cardHeight = 3
 	}
 	contentHeight := cardHeight - 2
-	usableWidth := cardWidth - 4
-	if usableWidth < 1 {
-		usableWidth = 1
-	}
+	usableWidth := max(1, cardWidth-4)
 
-	resLabel := "TRANSLATION"
+	resLabel := "Translation"
 	if m.mode == ModeAnalyze {
-		resLabel = "ANALYSIS"
+		resLabel = "Analysis"
 	}
 
-	var content string
-	switch {
-	case m.loading:
-		statusText := m.status
-		if statusText == "" {
-			statusText = "processing..."
-		}
-		loader := m.spinner.View() + " " + m.styles.StatusWarning.Render(statusText)
-		if m.result != "" {
-			content = loader + "\n\n" + RenderHighlightedText(m.result, m.highlightQuery, m.styles)
-		} else {
-			content = loader
-		}
-	case m.mode == ModeAnalyze && m.analysisResult != nil:
-		content = RenderAnalysisStructured(*m.analysisResult, m.highlightQuery, m.styles, cardWidth)
-	case m.result != "":
-		content = RenderHighlightedText(m.result, m.highlightQuery, m.styles)
-	}
-
+	content := m.resultText()
 	if strings.TrimSpace(content) == "" {
 		lines := make([]string, contentHeight)
-		message := "Translation will appear here · Alt+Enter to submit"
-		if m.mode == ModeAnalyze {
-			message = "Analysis will appear here · Alt+Enter to submit"
+		message := "Translation appears here"
+		style := m.styles.EmptyState
+		if m.loading {
+			statusText := strings.ReplaceAll(m.status, "\n", " ")
+			if statusText == "" {
+				statusText = "Translating…"
+			}
+			message = m.spinner.View() + " " + statusText
+			style = m.styles.StatusWarning
+		} else if m.mode == ModeAnalyze {
+			message = "Analysis appears here"
 		}
 		mid := contentHeight / 2
 		if mid >= len(lines) {
 			mid = len(lines) - 1
 		}
 		if mid >= 0 {
-			lines[mid] = lipgloss.PlaceHorizontal(usableWidth, lipgloss.Center, m.styles.EmptyState.Render(message))
+			lines[mid] = lipgloss.PlaceHorizontal(usableWidth, lipgloss.Center, style.Render(message))
 		}
-		return m.titledCard(resLabel, lines, cardWidth, cardHeight, false)
+		return m.titledCard(resLabel, m.resultMeta(0, contentHeight, 0), lines, cardWidth, cardHeight, m.focusOutput)
 	}
 
 	wrapped := wrapANSI(content, usableWidth)
@@ -2016,86 +1967,311 @@ func (m Model) renderResultCard(cardWidth, cardHeight int) string {
 			viewport[i] = wrapped[idx]
 		}
 	}
-	return m.titledCard(resLabel, viewport, cardWidth, cardHeight, false)
+	return m.titledCard(resLabel, m.resultMeta(scroll, contentHeight, len(wrapped)), viewport, cardWidth, cardHeight, m.focusOutput)
 }
 
-func (m Model) renderStatusLine() string {
-	statusText := strings.ReplaceAll(m.status, "\n", " ")
+// resultMeta keeps the output border informative without changing its height.
+func (m Model) resultMeta(scroll, visible, total int) string {
 	if m.loading {
-		if statusText == "" {
-			statusText = "processing..."
+		if total > visible {
+			last := min(total, scroll+visible)
+			return fmt.Sprintf("%s %d–%d / %d", m.spinner.View(), scroll+1, last, total)
 		}
-		return m.spinner.View() + " " + m.styles.StatusWarning.Render(statusText)
+		return ""
 	}
-	if statusText != "" {
-		noticePrefixes := []string{
-			"target language set to ", "model set to ", "provider set to ", "word analysis mode",
-			"quick translation mode", "filtering", "showing all", "provider ", "auto-copied",
-			"key saved for ",
+	if total > visible {
+		last := min(total, scroll+visible)
+		return fmt.Sprintf("%d–%d / %d", scroll+1, last, total)
+	}
+	return m.langPair()
+}
+
+// renderCommandPopup builds the floating palette. Its dimensions are decided
+// by the caller from terminal size only; the item count never resizes it.
+func (m Model) renderCommandPopup(width, height int) string {
+	kind, items, title, _ := m.suggestionItems()
+	if kind == "" || title == "" {
+		return ""
+	}
+	contentHeight := max(1, height-2)
+	start, end := m.popupWindow(contentHeight, len(items))
+	lines := m.popupLines(kind, max(1, width-4), contentHeight, start, end)
+	return m.titledCard(title, m.popupMeta(start, end, len(items)), lines, width, height, true)
+}
+
+func (m Model) popupWindow(rows, total int) (start, end int) {
+	if rows < 1 || total < 1 {
+		return 0, 0
+	}
+	focus := m.suggestIdx
+	if focus < 0 || focus >= total {
+		focus = 0
+	}
+	if focus >= rows {
+		start = focus - rows + 1
+	}
+	if start+rows > total {
+		start = max(0, total-rows)
+	}
+	end = min(total, start+rows)
+	return start, end
+}
+
+func (m Model) popupLines(kind string, width, rows, start, end int) []string {
+	lines := make([]string, 0, rows)
+	switch kind {
+	case "command":
+		suggestions := slashSuggestionsFor(m.input.Value())
+		showDesc := width >= 48
+		rowWidth := max(1, width-3)
+		usageWidth := rowWidth
+		if showDesc {
+			usageWidth = min(30, max(10, rowWidth/2))
 		}
-		for _, prefix := range noticePrefixes {
-			if strings.HasPrefix(statusText, prefix) {
-				return m.styles.StatusSuccess.Render("✓ " + statusText)
+		for i := start; i < end && i < len(suggestions); i++ {
+			command := suggestions[i]
+			usage := command.Usage
+			description := command.Description
+			if !showDesc {
+				description = ""
+			}
+			if i == m.suggestIdx {
+				plain := " ▸ " + fitLine(usage, usageWidth)
+				if description != "" {
+					plain += "  " + description
+				}
+				lines = append(lines, m.styles.PopupSelected.Render(fitLine(plain, width)))
+				continue
+			}
+			line := "   " + fitLine(m.styles.PopupKey.Render(usage), usageWidth)
+			if description != "" {
+				line += "  " + m.styles.PopupDesc.Render(description)
+			}
+			lines = append(lines, fitLine(line, width))
+		}
+	case "language":
+		_, query, _ := slashLanguageQuery(m.input.Value())
+		suggestions := m.languageSuggestions(query)
+		for i := start; i < end && i < len(suggestions); i++ {
+			suggestion := suggestions[i]
+			label := string(suggestion.Language) + " · " + suggestion.Name
+			if suggestion.Region != "" && width >= 44 {
+				label += " · " + suggestion.Region
+			}
+			if i == m.suggestIdx {
+				lines = append(lines, m.styles.PopupSelected.Render(fitLine(" ▸ "+label, width)))
+			} else {
+				lines = append(lines, fitLine("   "+label, width))
 			}
 		}
-		promptPrefixes := []string{"enter an API key", "add an API key", "choose a language"}
-		for _, prefix := range promptPrefixes {
-			if strings.HasPrefix(statusText, prefix) {
-				return m.styles.StatusWarning.Render("→ " + statusText)
-			}
+	}
+	for len(lines) < rows {
+		lines = append(lines, "")
+	}
+	if len(lines) > rows {
+		lines = lines[:rows]
+	}
+	return lines
+}
+
+func (m Model) popupMeta(start, end, total int) string {
+	if total <= 0 {
+		return ""
+	}
+	if total > end-start {
+		return fmt.Sprintf("%d–%d / %d", start+1, end, total)
+	}
+	return fmt.Sprintf("%d", total)
+}
+
+// keyHint is one context-sensitive footer shortcut.
+type keyHint struct {
+	key  string
+	desc string
+}
+
+func (m Model) footerHints() []keyHint {
+	if m.hasSuggestions() {
+		kind, _, _, _ := m.suggestionItems()
+		pick := "Select"
+		if kind == "language" {
+			pick = "Apply"
 		}
-		switch statusText {
-		case "done":
-			return m.styles.StatusSuccess.Render("✓ Done")
-		case "copied":
-			return m.styles.StatusSuccess.Render("✓ Copied to clipboard")
-		case "cancelled":
-			return m.styles.StatusWarning.Render("⊘ Request cancelled")
-		default:
-			return m.styles.StatusDanger.Render("✗ " + statusText)
+		return []keyHint{
+			{key: "↑↓", desc: "Navigate"},
+			{key: "Enter", desc: pick},
+			{key: "Esc", desc: "Close"},
 		}
+	}
+	if m.loading {
+		return []keyHint{
+			{key: "Esc", desc: "Cancel"},
+			{key: "Ctrl+D", desc: "Quit"},
+		}
+	}
+	if m.focusOutput && m.result != "" {
+		hints := []keyHint{{key: "Ctrl+Y", desc: "Copy"}}
+		if m.resultOverflow() {
+			hints = append(hints, keyHint{key: "PgUp/PgDn", desc: "Scroll"})
+		}
+		return append(hints, keyHint{key: "Esc", desc: "Back"})
 	}
 	if m.highlightQuery != "" {
-		return m.styles.BoxMeta.Render("highlight: " + m.highlightQuery + " · Esc to clear")
+		hints := []keyHint{{key: "Ctrl+H", desc: "Edit"}}
+		if m.result != "" {
+			hints = append(hints, keyHint{key: "Ctrl+Y", desc: "Copy"})
+		}
+		return append(hints, keyHint{key: "Esc", desc: "Clear"})
 	}
-	value := strings.TrimSpace(m.input.Value())
-	if value != "" {
-		lines := strings.Count(m.input.Value(), "\n") + 1
-		if lines > m.inputContentHeight() {
-			return m.styles.BoxMeta.Render(fmt.Sprintf("↕ %d lines · editor scrolls", lines))
+	if m.result != "" {
+		hints := []keyHint{{key: "Ctrl+Y", desc: "Copy"}}
+		if m.resultOverflow() {
+			hints = append(hints, keyHint{key: "PgUp/PgDn", desc: "Scroll"})
+		}
+		if m.mode == ModeAnalyze {
+			hints = append(hints, keyHint{key: "Alt+Enter", desc: "Retry"})
+		} else {
+			hints = append(hints, keyHint{key: "Alt+Enter", desc: "Retry"})
+		}
+		return append(hints, keyHint{key: "/", desc: "Commands"})
+	}
+	submit := "Translate"
+	if m.mode == ModeAnalyze {
+		submit = "Analyze"
+	}
+	return []keyHint{
+		{key: "Alt+Enter", desc: submit},
+		{key: "/", desc: "Commands"},
+		{key: "Tab", desc: "Mode"},
+		{key: "Ctrl+D", desc: "Quit"},
+	}
+}
+
+func (m Model) renderHintLine(hints []keyHint, width int) string {
+	render := func(items []keyHint, withDesc bool) string {
+		parts := make([]string, 0, len(items))
+		for _, hint := range items {
+			part := m.styles.FooterKey.Render(hint.key)
+			if withDesc && hint.desc != "" {
+				part += " " + m.styles.FooterDesc.Render(hint.desc)
+			}
+			parts = append(parts, part)
+		}
+		return strings.Join(parts, "  ·  ")
+	}
+	if width <= 0 {
+		return ""
+	}
+	full := render(hints, true)
+	if lipgloss.Width(full) <= width {
+		return full
+	}
+	keys := render(hints, false)
+	if lipgloss.Width(keys) <= width {
+		return keys
+	}
+	for n := len(hints); n > 0; n-- {
+		candidate := render(hints[:n], false)
+		if lipgloss.Width(candidate) <= width {
+			return candidate
 		}
 	}
 	return ""
 }
 
-// renderFooter is always present so the bottom of the screen never moves.
-// The text the user sees at wide sizes is the canonical keybinding line.
-func (m Model) renderFooter(cardWidth int) string {
-	footerText := "Alt+Enter translate · / commands · Tab mode · Ctrl+E key · Ctrl+Y copy · Ctrl+D quit"
-	if cardWidth < 84 {
-		footerText = "Alt+Enter translate · / commands · Ctrl+E key · Ctrl+D quit"
+// footerStatus returns the left-hand status label. The final bool marks a
+// message that must not be dropped when the footer is narrow (errors, prompts,
+// and in-flight work).
+func (m Model) footerStatus() (string, lipgloss.Style, bool) {
+	statusText := strings.ReplaceAll(m.status, "\n", " ")
+	if m.loading {
+		if statusText == "" {
+			statusText = "Working…"
+		}
+		return m.spinner.View() + " " + statusText, m.styles.StatusWarning, true
 	}
-	if cardWidth < 64 {
-		footerText = "Alt+Enter · / commands · Ctrl+E key"
-	}
-	if cardWidth < 40 {
-		footerText = "Alt+Enter · /"
+	if statusText != "" {
+		noticePrefixes := []string{
+			"target language set to ", "model set to ", "provider set to ", "word analysis mode",
+			"quick translation mode", "filtering", "showing all", "auto-copied",
+			"key saved for ",
+		}
+		for _, prefix := range noticePrefixes {
+			if strings.HasPrefix(statusText, prefix) {
+				return "✓ " + statusText, m.styles.StatusSuccess, true
+			}
+		}
+		if strings.HasPrefix(statusText, "provider ") && strings.Contains(statusText, " · model ") {
+			return "✓ " + statusText, m.styles.StatusSuccess, true
+		}
+		promptPrefixes := []string{"enter an API key", "add an API key", "choose a language"}
+		for _, prefix := range promptPrefixes {
+			if strings.HasPrefix(statusText, prefix) {
+				return "→ " + statusText, m.styles.StatusWarning, true
+			}
+		}
+		switch statusText {
+		case "done":
+			return "✓ Done", m.styles.StatusSuccess, true
+		case "copied":
+			return "✓ Copied to clipboard", m.styles.StatusSuccess, true
+		case "cancelled":
+			return "⊘ Request cancelled", m.styles.StatusWarning, true
+		default:
+			return "✗ " + statusText, m.styles.StatusDanger, true
+		}
 	}
 	if m.highlightQuery != "" {
-		footerText = "highlight: " + m.highlightQuery + " · Esc clear"
+		return "Highlight: " + m.highlightQuery, m.styles.StatusNeutral, false
 	}
-	styled := lipgloss.NewStyle().Foreground(lipgloss.Color(ColorTextMuted)).Render(footerText)
-	return fitLine(lipgloss.PlaceHorizontal(cardWidth, lipgloss.Center, styled), cardWidth)
+	if m.hasSuggestions() {
+		_, _, title, _ := m.suggestionItems()
+		return title, m.styles.StatusNeutral, false
+	}
+	if m.focusOutput && m.result != "" {
+		return "Result", m.styles.StatusNeutral, false
+	}
+	return "Ready", m.styles.StatusNeutral, false
+}
+
+// renderFooter is a single fixed row: contextual status on the left and only
+// the shortcuts that apply to the current screen on the right.
+func (m Model) renderFooter(cardWidth int) string {
+	inner := max(1, cardWidth-2)
+	status, style, important := m.footerStatus()
+	hints := ""
+	statusPart := ""
+
+	if important {
+		// Preserve actionable feedback first; shortcuts use whatever space is
+		// left and disappear cleanly in a narrow split pane.
+		statusPart = style.Render(ansi.Truncate(status, max(1, inner-2), "…"))
+		budget := inner - lipgloss.Width(statusPart) - 2
+		if budget >= 10 {
+			hints = m.renderHintLine(m.footerHints(), budget)
+		}
+	} else {
+		hints = m.renderHintLine(m.footerHints(), inner)
+		available := inner - lipgloss.Width(hints) - 2
+		if available >= 8 {
+			statusPart = style.Render(ansi.Truncate(status, available, "…"))
+		}
+	}
+
+	if statusPart == "" && hints == "" {
+		return " " + strings.Repeat(" ", inner) + " "
+	}
+	if statusPart == "" {
+		return " " + lipgloss.PlaceHorizontal(inner, lipgloss.Right, hints) + " "
+	}
+	gap := max(2, inner-lipgloss.Width(statusPart)-lipgloss.Width(hints))
+	return " " + fitLine(statusPart+strings.Repeat(" ", gap)+hints, inner) + " "
 }
 
 func (m Model) renderModal(title, label, inputView, hint string) string {
 	width := m.width
 	if width == 0 {
 		width = 80
-	}
-	height := m.height
-	if height == 0 {
-		height = 24
 	}
 	boxWidth := min(64, width-4)
 	if boxWidth < 30 || boxWidth > width-2 {
@@ -2114,8 +2290,8 @@ func (m Model) renderModal(title, label, inputView, hint string) string {
 	lines = append(lines, "")
 	lines = append(lines, hintLines...)
 
-	modalBox := m.titledCard(title, lines, boxWidth, len(lines)+2, true)
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modalBox)
+	modalBox := m.titledCard(title, "", lines, boxWidth, len(lines)+2, true)
+	return m.centeredOverlay(modalBox, ColorBgRaised)
 }
 
 // renderAPIKeyModal is intentionally compact: the provider, the masked key,
@@ -2125,10 +2301,6 @@ func (m Model) renderAPIKeyModal() string {
 	width := m.width
 	if width == 0 {
 		width = 80
-	}
-	height := m.height
-	if height == 0 {
-		height = 24
 	}
 	boxWidth := min(64, width-4)
 	if boxWidth < 36 || boxWidth > width-2 {
@@ -2165,8 +2337,8 @@ func (m Model) renderAPIKeyModal() string {
 	lines = append(lines, fitLine(m.styles.BoxMeta.Render("saves to "+prettyConfigPath()), innerWidth))
 	lines = append(lines, fitLine(m.styles.ModalHint.Render("Enter save  ·  Esc cancel  ·  input is hidden"), innerWidth))
 
-	modalBox := m.titledCard("Connect Provider", lines, boxWidth, len(lines)+2, true)
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modalBox)
+	modalBox := m.titledCard("Connect Provider", "masked input", lines, boxWidth, len(lines)+2, true)
+	return m.centeredOverlay(modalBox, ColorBgRaised)
 }
 
 func formatAnalysis(r analysis.Result) string {

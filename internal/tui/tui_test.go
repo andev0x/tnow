@@ -174,7 +174,7 @@ func TestModelViewAndKeybindings(t *testing.T) {
 	if !strings.Contains(view, "Quick") {
 		t.Errorf("expected view to contain 'Quick' mode badge")
 	}
-	if !strings.Contains(view, "INPUT") {
+	if !strings.Contains(view, "Input") {
 		t.Errorf("expected view to contain 'INPUT' label")
 	}
 
@@ -185,7 +185,7 @@ func TestModelViewAndKeybindings(t *testing.T) {
 		t.Errorf("expected mode to switch to ModeAnalyze")
 	}
 	view = m.View()
-	if !strings.Contains(view, "WORD / PHRASE") {
+	if !strings.Contains(view, "Word / Phrase") {
 		t.Errorf("expected view to contain 'WORD / PHRASE' label in analyze mode")
 	}
 

@@ -33,7 +33,6 @@ func (m Model) renderModelsBrowser() string {
 	if width == 0 {
 		width = 80
 	}
-	height := m.effectiveHeight()
 
 	modalWidth := max(24, min(96, width-4))
 	if modalWidth > width-2 {
@@ -52,8 +51,8 @@ func (m Model) renderModelsBrowser() string {
 			"",
 			fitLine(m.styles.BoxMeta.Render("Press Esc to close."), innerWidth),
 		}
-		box := m.titledCard("MODEL CONTROL", body, modalWidth, modalHeight, true)
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+		box := m.titledCard("Model Control", "", body, modalWidth, modalHeight, true)
+		return m.centeredOverlay(box, ColorBgRaised)
 	}
 
 	m.mbProviderIdx = max(0, min(m.mbProviderIdx, len(providers)-1))
@@ -138,8 +137,8 @@ func (m Model) renderModelsBrowser() string {
 		lines = append(lines, m.modelsHintLine(selectedProvider, selectedModel, innerWidth))
 	}
 
-	box := m.titledCard("MODEL CONTROL", lines, modalWidth, modalHeight, true)
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+	box := m.titledCard("Model Control", fmt.Sprintf("%d providers", len(providers)), lines, modalWidth, modalHeight, true)
+	return m.centeredOverlay(box, ColorBgRaised)
 }
 
 // providerPaneLines returns exactly height lines. When the provider list is
@@ -148,7 +147,7 @@ func (m Model) providerPaneLines(providers []string, width, height int) []string
 	if height < 1 {
 		height = 1
 	}
-	title := "PROVIDERS"
+	title := "Providers"
 	if m.mbFocus == "provider" {
 		title = m.styles.SuggestActive.Render("▸ " + title)
 	} else {
@@ -227,7 +226,7 @@ func (m Model) modelPaneLines(models []string, provider string, width, height in
 	if height < 1 {
 		height = 1
 	}
-	title := "MODELS · " + strings.ToLower(provider)
+	title := "Models · " + strings.ToLower(provider)
 	if m.mbFocus == "model" {
 		title = m.styles.SuggestActive.Render("▸ " + title)
 	} else {
@@ -373,11 +372,14 @@ func (m Model) modelsNotice(width int) string {
 
 func (m Model) modelsHintLine(provider, model string, width int) string {
 	left := "←→ pane  ·  ↑↓ select  ·  Enter assign  ·  Ctrl+E key  ·  Ctrl+T filter  ·  Esc close"
-	if width < 62 {
-		left = "↑↓ select · Enter assign · Ctrl+E key · Esc close"
+	if width < 84 {
+		left = "↑↓ select · Enter assign · Ctrl+E · Esc"
+	}
+	if width < 56 {
+		left = "↑↓ · Enter · Ctrl+E · Esc"
 	}
 	if width < 40 {
-		left = "↑↓ · Enter · Ctrl+E · Esc"
+		left = "↑↓ · Enter · Esc"
 	}
 	right := "live catalog"
 	if m.modelErr != "" {

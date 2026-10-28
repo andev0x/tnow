@@ -4,28 +4,37 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Soothing Color Palette (Nord / Tokyo Night / Catppuccin Macchiato inspired)
+// Palette inspired by Tokyo Night / Catppuccin Macchiato. Every surface has a
+// dedicated opaque background so text never bleeds through from the terminal
+// or from a panel below an overlay.
 const (
-	ColorBgBase        = "#1e1e2e" // Deep soothing background
-	ColorBgCard        = "#222436" // Elevated card background
-	ColorBgPill        = "#282a3e" // Subtle pill/chip background
-	ColorBorderSubtle  = "#3b4261" // Understated, subtle divider & border lines
-	ColorBorderFocused = "#58628b" // Focused subtle border line
+	ColorBgBase      = "#16161e" // Full-screen canvas
+	ColorBgPanel     = "#1e2030" // Input / output panels
+	ColorBgRaised    = "#24273a" // Floating command palette and dialogs
+	ColorBgBar       = "#1b1d29" // Bottom status / shortcut bar
+	ColorBgPill      = "#2a2e42" // Inline badges
+	ColorBgSelection = "#2f3b61" // Selected command row
+	ColorBgShadow    = "#0f1017" // Depth under floating surfaces
+	ColorBgCard      = ColorBgPanel
 
-	ColorTextPrimary   = "#c0caf5" // Soft high-contrast text
-	ColorTextSecondary = "#9aa5ce" // Gentle secondary text
-	ColorTextMuted     = "#565f89" // Subtle placeholder & hints
-	ColorTextDim       = "#414868" // Darker subtle lines
+	ColorBorderSubtle  = "#2f3549"
+	ColorBorderFocused = "#7dcfff" // Teal focus accent
+	ColorBorderIdle    = "#3b4261"
 
-	ColorPrimary   = "#7aa2f7" // Soothing primary blue
-	ColorSecondary = "#bb9af7" // Calming lavender / mauve
-	ColorTeal      = "#7dcfff" // Soft cyan / frost
-	ColorSuccess   = "#9ece6a" // Gentle sage green (done, copied)
-	ColorWarning   = "#e0af68" // Warm soft amber (streaming, loading)
-	ColorDanger    = "#f7768e" // Soft coral / rose (error)
+	ColorTextPrimary   = "#c0caf5"
+	ColorTextSecondary = "#a9b1d6"
+	ColorTextMuted     = "#565f89"
+	ColorTextDim       = "#414868"
 
-	ColorHighlightBg = "#2d3f76" // Soothing deep indigo background for highlights
-	ColorHighlightFg = "#ffc777" // Warm gold/amber foreground for highlights
+	ColorPrimary   = "#7aa2f7"
+	ColorSecondary = "#bb9af7"
+	ColorTeal      = "#7dcfff"
+	ColorSuccess   = "#9ece6a"
+	ColorWarning   = "#e0af68"
+	ColorDanger    = "#f7768e"
+
+	ColorHighlightBg = "#2d3f76"
+	ColorHighlightFg = "#ffc777"
 )
 
 type Styles struct {
@@ -40,17 +49,22 @@ type Styles struct {
 	CardBox      lipgloss.Style
 	CardBoxFocus lipgloss.Style
 
-	// Brand & Header Bar
+	// Brand & Header
 	Logo         lipgloss.Style
 	ModeActive   lipgloss.Style
 	ModeInactive lipgloss.Style
+	HeaderMeta   lipgloss.Style
 	BadgePill    lipgloss.Style
 	BadgeArrow   lipgloss.Style
 
 	// Card Sections
-	BoxLabel   lipgloss.Style
-	BoxMeta    lipgloss.Style
-	EmptyState lipgloss.Style
+	BoxLabel      lipgloss.Style
+	PanelTitle    lipgloss.Style
+	PanelTitleOn  lipgloss.Style
+	PanelMeta     lipgloss.Style
+	BoxMeta       lipgloss.Style
+	EmptyState    lipgloss.Style
+	SectionHeader lipgloss.Style
 
 	// Highlighting
 	Highlight       lipgloss.Style
@@ -70,10 +84,13 @@ type Styles struct {
 	StatusSuccess lipgloss.Style
 	StatusWarning lipgloss.Style
 	StatusDanger  lipgloss.Style
+	StatusNeutral lipgloss.Style
 
 	// Keycaps / Footer
 	KeycapKey  lipgloss.Style
 	KeycapDesc lipgloss.Style
+	FooterKey  lipgloss.Style
+	FooterDesc lipgloss.Style
 
 	// Modal / Overlay Dialog
 	ModalOverlay lipgloss.Style
@@ -87,6 +104,14 @@ type Styles struct {
 	SuggestIdle    lipgloss.Style
 	Ghost          lipgloss.Style
 	BadgeExcellent lipgloss.Style
+
+	// Command palette
+	PopupTitle    lipgloss.Style
+	PopupMeta     lipgloss.Style
+	PopupKey      lipgloss.Style
+	PopupDesc     lipgloss.Style
+	PopupPointer  lipgloss.Style
+	PopupSelected lipgloss.Style
 }
 
 func DefaultStyles() Styles {
@@ -104,16 +129,18 @@ func DefaultStyles() Styles {
 		CardBox: lipgloss.NewStyle().
 			Border(subtleBorder).
 			BorderForeground(lipgloss.Color(ColorBorderSubtle)).
+			Background(lipgloss.Color(ColorBgPanel)).
 			Padding(0, 1),
 		CardBoxFocus: lipgloss.NewStyle().
 			Border(subtleBorder).
 			BorderForeground(lipgloss.Color(ColorBorderFocused)).
+			Background(lipgloss.Color(ColorBgPanel)).
 			Padding(0, 1),
 
 		// Brand & Header
 		Logo: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(ColorPrimary)),
+			Foreground(lipgloss.Color(ColorTeal)),
 		ModeActive: lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color(ColorBgBase)).
@@ -121,8 +148,9 @@ func DefaultStyles() Styles {
 			Padding(0, 1),
 		ModeInactive: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(ColorTextMuted)).
-			Background(lipgloss.Color(ColorBgPill)).
 			Padding(0, 1),
+		HeaderMeta: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(ColorTextSecondary)),
 		BadgePill: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(ColorTextSecondary)).
 			Background(lipgloss.Color(ColorBgPill)).
@@ -135,11 +163,22 @@ func DefaultStyles() Styles {
 		BoxLabel: lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color(ColorTeal)),
+		PanelTitle: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(ColorTextSecondary)),
+		PanelTitleOn: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(ColorBorderFocused)),
+		PanelMeta: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(ColorTextMuted)),
 		BoxMeta: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(ColorTextMuted)),
 		EmptyState: lipgloss.NewStyle().
 			Italic(true).
 			Foreground(lipgloss.Color(ColorTextMuted)),
+		SectionHeader: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(ColorSecondary)),
 
 		// Text & Section Highlighting
 		Highlight: lipgloss.NewStyle().
@@ -194,6 +233,8 @@ func DefaultStyles() Styles {
 		StatusDanger: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(ColorDanger)).
 			Bold(true),
+		StatusNeutral: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(ColorTextMuted)),
 
 		// Footer Keycaps
 		KeycapKey: lipgloss.NewStyle().
@@ -203,13 +244,19 @@ func DefaultStyles() Styles {
 			Bold(true),
 		KeycapDesc: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(ColorTextMuted)),
+		FooterKey: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(ColorTeal)).
+			Bold(true),
+		FooterDesc: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(ColorTextMuted)),
 
 		// Modal
 		ModalOverlay: lipgloss.NewStyle().
 			Padding(1, 2),
 		ModalBox: lipgloss.NewStyle().
 			Border(subtleBorder).
-			BorderForeground(lipgloss.Color(ColorPrimary)).
+			BorderForeground(lipgloss.Color(ColorBorderFocused)).
+			Background(lipgloss.Color(ColorBgRaised)).
 			Padding(1, 2),
 		ModalTitle: lipgloss.NewStyle().
 			Bold(true).
@@ -222,10 +269,11 @@ func DefaultStyles() Styles {
 		SuggestBox: lipgloss.NewStyle().
 			Border(subtleBorder).
 			BorderForeground(lipgloss.Color(ColorBorderSubtle)).
+			Background(lipgloss.Color(ColorBgRaised)).
 			Padding(0, 1),
 		SuggestActive: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(ColorPrimary)).
-			Background(lipgloss.Color(ColorBgPill)).
+			Foreground(lipgloss.Color(ColorTextPrimary)).
+			Background(lipgloss.Color(ColorBgSelection)).
 			Bold(true),
 		SuggestIdle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(ColorTextPrimary)),
@@ -235,5 +283,24 @@ func DefaultStyles() Styles {
 		BadgeExcellent: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(ColorSuccess)).
 			Bold(true),
+
+		// Command palette
+		PopupTitle: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(ColorBorderFocused)),
+		PopupMeta: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(ColorTextMuted)),
+		PopupKey: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(ColorPrimary)),
+		PopupDesc: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(ColorTextMuted)),
+		PopupPointer: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(ColorBorderFocused)),
+		PopupSelected: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(ColorTextPrimary)).
+			Background(lipgloss.Color(ColorBgSelection)),
 	}
 }

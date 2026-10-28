@@ -63,7 +63,7 @@ Type any text and press `Alt+Enter` to translate. No chat — just a bounded ope
 | `Ctrl+M` / `Alt+M` | set model (modal) |
 | `Ctrl+H` | highlight word/section (Esc to clear) |
 | `Ctrl+E` | add or replace the active provider's API key |
-| `Esc` | cancel request / dismiss overlay / clear highlight |
+| `Esc` | dismiss the command palette or overlay / cancel request / clear highlight |
 | `Ctrl+C` | clear the input and result |
 | `Ctrl+D` | quit |
 | `↑` / `↓` / `Ctrl+P` / `Ctrl+N` | navigate suggestions |
@@ -72,11 +72,11 @@ Type any text and press `Alt+Enter` to translate. No chat — just a bounded ope
 ### Autocomplete
 
 The input card has a fixed height. Long drafts wrap and scroll inside it, and an
-empty card shows a placeholder instead of changing size. Typing `/` opens the
-command list in the fixed panel below the input (or inside the input in very
-short panes); opening, filtering, or closing the menu never resizes either card.
-The menu also works when the slash command is on the last line of a longer
-translation draft:
+empty card shows a placeholder instead of changing size. Typing `/` opens a
+floating command palette over the output area; it has a fixed size derived only
+from the terminal, so opening, filtering, or closing it never resizes or moves
+the input or translation panels. The palette also works when the slash command
+is on the last line of a longer translation draft:
 
 - `/` → all slash commands
 - `/m` → matches `/models`
@@ -87,12 +87,17 @@ translation draft:
 - `/help` → show help
 
 Navigation is keyboard-only: `↑↓` to move, `Tab`/`Enter` to accept, `Esc` to
-clear the selection. Enter applies a resolved target immediately; ambiguous
-input keeps the picker open so you can choose. Source language remains `auto`
-by default and is detected from the submitted text. The input, command, and
-result cards all use centered titles and fixed heights derived only from the
-terminal size, so the layout stays stable in split panes and short windows;
-long text scrolls inside the editor and result panel.
+dismiss the palette while keeping any draft above the slash line. Enter applies
+a resolved target immediately; ambiguous input keeps the picker open so you can
+choose. Source language remains `auto` by default and is detected from the
+submitted text.
+
+The interface uses opaque layered surfaces (terminal background, panel, raised
+palette), top-left IDE-style panel titles, and a focus accent that follows the
+active input or output panel. All card heights come from the terminal size only,
+so the layout stays stable in split panes and short windows; long text scrolls
+inside the editor and result panel, and the footer shows only shortcuts relevant
+to the current state.
 
 ### Models & Providers
 

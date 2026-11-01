@@ -90,7 +90,7 @@ export GROQ_API_KEY="..."
 tnow --provider groq --model llama-3.3-70b-versatile "Hello world"
 
 export GEMINI_API_KEY="..."
-tnow --provider gemini --model gemini-2.0-flash "Hello world"
+tnow --provider gemini --model gemini-3.5-flash-lite "Hello world"
 
 export OPENROUTER_API_KEY="..."
 tnow --provider openrouter --model openai/gpt-4o-mini "Hello world"
@@ -182,7 +182,7 @@ tnow --word hello
 | --- | --- | --- |
 | `provider unavailable` | Ollama is not running or the endpoint is wrong | Start `ollama serve`; check `OLLAMA_HOST` |
 | `authentication` | Missing or invalid API key | Set the provider's environment variable or use `Ctrl+E` |
-| `model error` | Model name not available to the provider | Use `--model` with an installed/authorized model |
+| `model error` (404) | Model name is retired or not enabled for the key | Choose another model with `Ctrl+M` or `--model` |
 | `validation: empty translation output` | Model returned an empty or filtered response | Retry, or choose a different model |
 | `validation: conversational filler` | Model replied with prose instead of a translation | Retry with a more instruction-following model |
 | TUI does not start | No TTY, or text was passed on stdin | Run `tnow` directly in a terminal |

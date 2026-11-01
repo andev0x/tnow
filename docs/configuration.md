@@ -200,12 +200,18 @@ providers:
 
 ```yaml
 default_provider: gemini
-default_model: gemini-2.0-flash
+default_model: gemini-3.5-flash-lite
 providers:
   - name: gemini
     base_url: https://generativelanguage.googleapis.com/v1beta/openai
-    model: gemini-2.0-flash
+    model: gemini-3.5-flash-lite
 ```
+
+Google retires Gemini models for new API keys, and a retired name returns
+`404 ... is no longer available to new users`. The model listed by
+`GET /v1beta/openai/models` can therefore still fail; open the model browser
+(`Ctrl+M` in the TUI) and pick another entry, or pass a current name with
+`--model`.
 
 ### OpenRouter
 

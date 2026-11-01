@@ -62,11 +62,7 @@ func (p *OpenAICompatible) ListModels(ctx context.Context) ([]string, error) {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(resp.Body)
-		kind := runtime.ErrModel
-		if resp.StatusCode == 401 || resp.StatusCode == 403 {
-			kind = runtime.ErrAuth
-		}
-		return nil, &runtime.RuntimeError{Kind: kind, Err: fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))}
+		return nil, statusError(resp.StatusCode, data, "")
 	}
 
 	var payload struct {
@@ -172,17 +168,7 @@ func (p *OpenAICompatible) Generate(ctx context.Context, req runtime.GenerationR
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
-		kind := runtime.ErrModel
-		if resp.StatusCode == 401 || resp.StatusCode == 403 {
-			kind = runtime.ErrAuth
-		}
-		if resp.StatusCode == 429 {
-			kind = runtime.ErrRateLimit
-		}
-		if resp.StatusCode >= 500 {
-			kind = runtime.ErrProviderUnavail
-		}
-		return runtime.GenerationResult{}, &runtime.RuntimeError{Kind: kind, Err: fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))}
+		return runtime.GenerationResult{}, statusError(resp.StatusCode, data, model)
 	}
 
 	if req.Stream {

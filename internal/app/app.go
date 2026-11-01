@@ -72,6 +72,7 @@ func New(cfg config.Config, providerOverride, modelOverride string) (*App, error
 }
 
 func (a *App) SetProvider(name string) {
+	previous := a.Provider
 	a.Provider = name
 	a.Config.DefaultProvider = name
 	// ensure provider entry exists so it can persist
@@ -95,12 +96,24 @@ func (a *App) SetProvider(name string) {
 	// doesn't change when returning later
 	if pc, ok := a.Config.Provider(name); ok && pc.Model != "" {
 		a.Model = pc.Model
+	} else if previous != "" && previous != name && a.modelBelongsTo(previous) {
+		// Never send a model that was chosen for another provider. Leaving it
+		// unset produces a clear "no model selected" error instead of a
+		// provider-side 404 for a model it has never heard of.
+		a.Model = ""
 	}
 	a.Translation.Provider = a.Provider
 	a.Translation.Model = a.Model
 	a.Analysis.Provider = a.Provider
 	a.Analysis.Model = a.Model
 	_ = config.Save(a.Config)
+}
+
+// modelBelongsTo reports whether the active model is the one configured for
+// the given provider.
+func (a *App) modelBelongsTo(provider string) bool {
+	pc, ok := a.Config.Provider(provider)
+	return ok && pc.Model != "" && pc.Model == a.Model
 }
 
 func (a *App) SetModel(model string) {

@@ -66,7 +66,7 @@ func (r *Runtime) Execute(ctx context.Context, req GenerationRequest) (Generatio
 		return GenerationResult{}, &RuntimeError{Kind: ErrConfig, Err: fmt.Errorf("unknown provider %q", req.Provider)}
 	}
 	if req.Model == "" {
-		return GenerationResult{}, &RuntimeError{Kind: ErrConfig, Err: errors.New("model is required")}
+		return GenerationResult{}, &RuntimeError{Kind: ErrConfig, Err: fmt.Errorf("no model selected for provider %q; choose one with --model or the model browser", req.Provider)}
 	}
 	// Apply timeout.
 	timeout := r.Timeout

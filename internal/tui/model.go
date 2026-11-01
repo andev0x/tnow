@@ -2178,6 +2178,20 @@ func (m *Model) scrollResult(delta int) {
 	m.resultScroll = max(0, m.resultScroll+delta)
 }
 
+// quickLoadingMessage turns the internal transport status into a readable
+// placeholder for the result panel. The raw status ("translating...") is kept
+// for unusual states so the user still sees what the request is doing.
+func quickLoadingMessage(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "", "translating...", "translating…":
+		return "Translating…"
+	case "streaming...", "streaming…":
+		return "Streaming…"
+	default:
+		return status
+	}
+}
+
 func (m Model) renderResultCard(cardWidth, cardHeight int) string {
 	if cardHeight < 3 {
 		cardHeight = 3
@@ -2195,14 +2209,22 @@ func (m Model) renderResultCard(cardWidth, cardHeight int) string {
 		lines := make([]string, contentHeight)
 		message := "Translation appears here"
 		style := m.styles.EmptyState
-		if m.loading && m.mode == ModeAnalyze {
-			// Analysis has no streamed output, so the center of the result
-			// card is the only place where progress can be shown.
+		if m.loading {
 			statusText := strings.ReplaceAll(m.status, "\n", " ")
-			if statusText == "" {
-				statusText = "Analyzing…"
+			if m.mode == ModeAnalyze {
+				// Analysis has no streamed output, so the center of the result
+				// card is the only place where progress can be shown.
+				if statusText == "" {
+					statusText = "Analyzing…"
+				}
+				message = m.spinner.View() + " " + statusText
+			} else {
+				// Quick keeps its single animated spinner in the footer, but
+				// the provider may take a couple of seconds to send the first
+				// chunk. Show progress in the result panel right away so the
+				// screen never looks idle after Alt+Enter.
+				message = quickLoadingMessage(statusText)
 			}
-			message = m.spinner.View() + " " + statusText
 			style = m.styles.StatusWarning
 		} else if m.mode == ModeAnalyze {
 			message = "Analysis appears here"

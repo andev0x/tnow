@@ -104,6 +104,47 @@ func TestQuickSubmitShowsSpinnerBeforeProviderResponds(t *testing.T) {
 	assertOnlyFooterSpinner(t, m)
 }
 
+func TestQuickSubmitShowsProgressInResultPanelImmediately(t *testing.T) {
+	p := &blockingProvider{release: make(chan struct{})}
+	t.Cleanup(func() { close(p.release) })
+
+	rt := runtime.New(map[string]runtime.Provider{"blocking": p}, "blocking")
+	m := sizedModel(t, 100, 30)
+	m.app.Translation = translation.NewEngine(rt, "blocking", "test-model")
+	m.input.SetValue("hello")
+	m.input.CursorEnd()
+
+	done := make(chan tea.Model, 1)
+	go func() {
+		tm, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+		done <- tm
+	}()
+
+	select {
+	case tm := <-done:
+		m = tm.(Model)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("Alt+Enter blocked until the provider responded")
+	}
+
+	if !m.loading {
+		t.Fatal("expected loading state immediately after Alt+Enter")
+	}
+
+	lines := plainLines(m.View())
+	if len(lines) < 2 {
+		t.Fatalf("unexpected view:\n%s", strings.Join(lines, "\n"))
+	}
+	progress := 0
+	for _, line := range lines[:len(lines)-1] {
+		progress += strings.Count(line, "Translating…")
+	}
+	if progress != 1 {
+		t.Fatalf("result panel should show progress immediately, found %d labels:\n%s", progress, strings.Join(lines, "\n"))
+	}
+	assertOnlyFooterSpinner(t, m)
+}
+
 func TestQuickStreamingKeepsSpinnerInFooter(t *testing.T) {
 	m := sizedModel(t, 80, 24)
 	m.mode = ModeQuick
